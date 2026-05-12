@@ -68,6 +68,7 @@ defmodule Fresco.Viewer do
     <div
       id={@id}
       phx-hook="FrescoViewer"
+      phx-update="ignore"
       data-src={@src}
       class={@class}
       {@rest}

@@ -239,6 +239,15 @@
     bridge("open", "open");
     bridge("resize", "resize");
 
+    // Per-frame events. `zoom` and `pan` only fire on the *intent* to
+    // zoom/pan (input or operation start). `animation` and `update-viewport`
+    // fire on every animation tick, so extensions that render in lockstep
+    // with the image (annotation overlays, measurement tools) get a chance
+    // to redraw at frame rate rather than only at the endpoints of OSD's
+    // spring interpolation.
+    bridge("animation", "animation");
+    bridge("update-viewport", "update-viewport");
+
     return {
       viewer: viewer,
       container: container,
