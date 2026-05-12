@@ -4,19 +4,35 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.2.0 — 2026-05-12
+## 0.1.1 — 2026-05-12
 
-Adds a nav-button extension slot — peer libraries can append their own
-buttons to Fresco's existing top-left nav column. No breaking changes;
-existing consumers see no behavioral difference.
+Small additive release for layered libraries. No breaking changes.
 
 ### Added
 
 - `handle.appendNavButton(svg, title, onClick)` — extensions append a
-  button to the same `.fresco-nav` flexbox column that holds zoom-in /
-  zoom-out / reset / fullscreen. Returns an unsubscribe function that
-  removes the button on cleanup. Used by [Etcher](https://hex.pm/packages/etcher)
-  to add a pencil button that toggles annotation mode.
+  button to the same `.fresco-nav` flexbox column that holds the
+  built-in zoom-in / zoom-out / reset / fullscreen. Returns an
+  unsubscribe function that removes the button on cleanup. Used by
+  [Etcher](https://hex.pm/packages/etcher) to add a pencil button
+  that toggles annotation mode.
+- `animation` and `update-viewport` events bridged on the viewer
+  handle (`handle.on("animation", fn)`). The existing `zoom` / `pan`
+  events only fire on the *intent* of an input; the new ones fire
+  on every spring-interpolated frame so overlays glide with the
+  image instead of jumping at endpoints.
+
+### Changed
+
+- `<Fresco.viewer>` now sets `phx-update="ignore"` on its host div.
+  Without it, LiveView morphdom patches walk the viewer's children
+  on every render and wipe OSD's runtime-added canvas + extension
+  overlays. The hook still receives `updated` callbacks for
+  attribute changes (e.g. `data-src` swaps continue to work) —
+  `phx-update` protects children only.
+- Nav column reordered top-to-bottom: fullscreen → zoom-in → zoom-out
+  → reset. Extensions appending via `handle.appendNavButton` land at
+  the bottom of the column.
 
 ## 0.1.0 — 2026-05-12
 
