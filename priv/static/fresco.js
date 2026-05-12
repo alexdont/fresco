@@ -176,6 +176,13 @@
 
     var zoomFactor = 1.4;
 
+    // Order matters — extensions append below this set via
+    // `handle.appendNavButton(...)`, so anything they add lands at the
+    // bottom of the column.
+    nav.appendChild(makeButton(ICONS.expand, "Toggle fullscreen", function() {
+      viewer.setFullPage(!viewer.isFullPage());
+    }));
+
     nav.appendChild(makeButton(ICONS.zoomIn, "Zoom in", function() {
       viewer.viewport.zoomBy(zoomFactor);
       viewer.viewport.applyConstraints();
@@ -188,10 +195,6 @@
 
     nav.appendChild(makeButton(ICONS.reset, "Reset view", function() {
       viewer.viewport.goHome();
-    }));
-
-    nav.appendChild(makeButton(ICONS.expand, "Toggle fullscreen", function() {
-      viewer.setFullPage(!viewer.isFullPage());
     }));
 
     if (getComputedStyle(container).position === "static") {
