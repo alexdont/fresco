@@ -47,7 +47,7 @@ defmodule Fresco.MixProject do
       source_ref: "v#{@version}",
       source_url: @source_url,
       main: "Fresco",
-      extras: ["README.md"]
+      extras: ["README.md", "CHANGELOG.md", "LICENSE"]
     ]
   end
 end
