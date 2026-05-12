@@ -4,6 +4,20 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.2.0 — 2026-05-12
+
+Adds a nav-button extension slot — peer libraries can append their own
+buttons to Fresco's existing top-left nav column. No breaking changes;
+existing consumers see no behavioral difference.
+
+### Added
+
+- `handle.appendNavButton(svg, title, onClick)` — extensions append a
+  button to the same `.fresco-nav` flexbox column that holds zoom-in /
+  zoom-out / reset / fullscreen. Returns an unsubscribe function that
+  removes the button on cleanup. Used by [Etcher](https://hex.pm/packages/etcher)
+  to add a pencil button that toggles annotation mode.
+
 ## 0.1.0 — 2026-05-12
 
 Initial release. Polished pan-zoom image viewer for Phoenix apps, with a

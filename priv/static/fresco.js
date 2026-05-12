@@ -221,7 +221,7 @@
   // The viewer handle exposed via Fresco.viewerFor
   // ===========================================================================
 
-  function makeHandle(viewer, container) {
+  function makeHandle(viewer, container, navEl) {
     var subscribers = {};   // eventName → [handler, …]
 
     // Bridge OSD events to our subscriber list.
@@ -278,6 +278,19 @@
           var arr = subscribers[eventName] || [];
           var idx = arr.indexOf(handler);
           if (idx !== -1) arr.splice(idx, 1);
+        };
+      },
+
+      // Append a button to Fresco's nav column (below the existing four:
+      // zoom-in, zoom-out, reset, fullscreen). Used by extensions like
+      // Etcher to add tool toggles. Returns an unsubscribe function that
+      // removes the button on cleanup.
+      appendNavButton: function(svg, title, onClick) {
+        if (!navEl) return function noop() {};
+        var btn = makeButton(svg, title, onClick);
+        navEl.appendChild(btn);
+        return function removeButton() {
+          if (btn.parentNode === navEl) navEl.removeChild(btn);
         };
       }
     };
@@ -337,8 +350,10 @@
         // Built-in nav overlay (zoom in/out/home/fullscreen).
         self.nav = buildNav(self.viewer, self.el);
 
-        // Publish the handle so extensions can attach.
-        self.handle = makeHandle(self.viewer, self.el);
+        // Publish the handle so extensions can attach. The nav element is
+        // passed through so extensions can append their own buttons via
+        // `handle.appendNavButton(...)`.
+        self.handle = makeHandle(self.viewer, self.el, self.nav);
         publishReady(self.el.id, self.handle);
       });
     },
