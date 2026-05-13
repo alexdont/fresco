@@ -1,8 +1,8 @@
 defmodule Fresco.MixProject do
   use Mix.Project
 
-  @version "0.1.1"
-  @description "Polished pan-zoom image viewer for Phoenix apps. The foundation for layered extensions (deep zoom, annotations, ML overlays); also useful standalone."
+  @version "0.1.3"
+  @description "Polished pan-zoom image viewer for Phoenix apps, with optional infinite-canvas mode for Figma/Miro-style workspaces around the image. The foundation for layered extensions (deep zoom, annotations, ML overlays); also useful standalone."
   @source_url "https://github.com/alexdont/fresco"
 
   def project do

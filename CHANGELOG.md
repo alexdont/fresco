@@ -4,6 +4,60 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.3 — 2026-05-14
+
+Opt-in infinite-canvas mode + a default dot-grid background. No
+breaking changes — every existing viewer keeps the stock clamped
+behavior unless `infinite_canvas` is explicitly set, and the
+grid is invisible by default (OSD's canvas paints over it).
+
+### Added
+
+- New `:infinite_canvas` attribute on `Fresco.viewer` (defaults to
+  `false`). When `true`:
+  - `visibilityRatio` drops to `0` and `constrainDuringPan` flips
+    to `false`, so the user can pan freely beyond the image edges.
+  - `minZoomImageRatio` lowers to `0.05` so the image can shrink
+    to a thumbnail in the middle of a vast canvas.
+  - The void around the image lights up with the dot-grid
+    background (see below); the host also picks up a
+    `.fresco-viewer--infinite` modifier class for any
+    infinite-only styling consumers want to add.
+- Subtle 24×24px dot-grid background on every Fresco viewer (via
+  the new `.fresco-viewer` base class on the host div). Hidden by
+  default because OSD's canvas paints over it; visible in the
+  void when `infinite_canvas` is on, or behind transparent /
+  padded images. Override `.fresco-viewer` in your own CSS for
+  dark mode or a different accent.
+- Documented future API: a planned `:sources` attribute will
+  accept a list of `[%{src: "...", offset: {x, y}}]` for
+  multiple images on the same canvas. The current `:src` stays
+  as the single-image shortcut — no migration when `:sources`
+  ships.
+
+## 0.1.2 — 2026-05-14
+
+Small UX + extension-API patch release. No breaking changes for
+existing consumers; the click-to-zoom default flip is documented
+below because it's user-visible.
+
+### Added
+
+- `handle.appendNavButton(...)`'s returned remover now carries
+  `.setIcon(svgString)`, `.setTitle(text)`, and `.el` (the underlying
+  `<button>` element). Extensions can mutate a button after creation
+  without re-adding it (which would reshuffle its position in the
+  nav column). Used by [Etcher](https://hex.pm/packages/etcher)
+  0.2's visibility toggle to flip eye ↔ eye-slash.
+
+### Changed
+
+- Mouse single-click no longer zooms. `gestureSettingsMouse.clickToZoom`
+  defaults to `false`; `dblClickToZoom`, scroll-to-zoom, and
+  pinch-to-zoom on touch are unchanged. Single clicks now reliably
+  pass through to overlays that want them (e.g. annotation selection)
+  instead of fighting OSD's built-in click-to-zoom.
+
 ## 0.1.1 — 2026-05-12
 
 Small additive release for layered libraries. No breaking changes.

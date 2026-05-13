@@ -16,7 +16,12 @@ defmodule FrescoTest do
       assert html =~ ~s(id="test-viewer")
       assert html =~ ~s(phx-hook="FrescoViewer")
       assert html =~ ~s(data-src="/uploads/photo.jpg")
-      assert html =~ ~s(class="w-full h-96")
+      # `fresco-viewer` is auto-added so the default dot-grid
+      # background rule has a hook; the caller's classes follow.
+      assert html =~ ~s(class="fresco-viewer w-full h-96")
+      # `infinite_canvas` defaults to false; the modifier class
+      # should NOT be on the host in stock mode.
+      refute html =~ "fresco-viewer--infinite"
     end
 
     test "passes global attributes through :rest" do

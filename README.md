@@ -47,7 +47,34 @@ You get:
 - **Fit-to-view** initial state regardless of image / container aspect ratio
 - **Heroicons nav overlay**: zoom-in / zoom-out / reset / fullscreen
 - **Viewport clamped** so the image can't be panned off-screen
+- **Subtle dot-grid background** on the viewer container (Figma/Miro style); shows through any padding around the image and lights up the void in `infinite_canvas` mode. Override `.fresco-viewer` in your own CSS for dark mode or a different accent.
 - **Smooth animations** tuned snappy-but-not-jarring
+
+---
+
+## Infinite canvas
+
+Opt-in mode that unclamps the viewer — the user can pan past the image edges into surrounding empty space and zoom out until the image is a thumbnail in the middle of a vast canvas. Useful when a layered overlay (e.g. [Etcher](https://hex.pm/packages/etcher) annotations) needs to draw shapes, callouts, or labels in the white space next to the image, Figma / Miro / Excalidraw style.
+
+```heex
+<Fresco.viewer
+  id="photo"
+  src={~p"/uploads/photo.jpg"}
+  class="w-full h-[80vh] rounded"
+  infinite_canvas
+/>
+```
+
+What changes when `infinite_canvas` is on:
+
+- `visibilityRatio` drops to `0` (image can fully scroll off-screen)
+- `constrainDuringPan` flips to `false` (no rubber-band during drag)
+- `minZoomImageRatio` lowers to `0.05` so the image can shrink to a thumbnail
+- The default `.fresco-viewer` dot-grid background that's present on every viewer becomes visible in the void around the image (in default clamped mode it's covered by OSD's canvas). The host div also picks up a `.fresco-viewer--infinite` modifier class so you can target infinite-mode-only styling.
+
+The home button (`reset zoom`) still returns to "image fits viewport" — the image stays the anchor point, just no longer the cage. Default is `infinite_canvas={false}`, so every existing viewer keeps the stock clamped behavior with no template changes required.
+
+> **Future API:** A planned `:sources` attribute will accept a list of `[%{src: "...", offset: {x, y}}]` for placing multiple images on the same canvas. The current `:src` will continue to work as a single-image shortcut — no migration required.
 
 ---
 

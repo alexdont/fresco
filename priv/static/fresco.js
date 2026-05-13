@@ -145,7 +145,21 @@
       ".fresco-nav button:focus-visible {",
       "  outline: 2px solid rgba(255, 255, 255, 0.7); outline-offset: 1px;",
       "}",
-      ".fresco-nav svg { width: 18px; height: 18px; }"
+      ".fresco-nav svg { width: 18px; height: 18px; }",
+      // Subtle dot grid on every Fresco viewer's host element. In
+      // the default clamped mode the image fills the viewport and
+      // the dots are invisible (OSD paints over them); in
+      // `infinite_canvas` mode the dots show through the void
+      // around the image so users can tell they're on a canvas,
+      // not in empty space. Fixed at 24×24 screen pixels so the
+      // spacing stays constant regardless of zoom — same approach
+      // Figma / Miro use. Override `.fresco-viewer` in your own
+      // CSS for dark mode or a different accent.
+      ".fresco-viewer {",
+      "  background-color: #fafafa;",
+      "  background-image: radial-gradient(circle, #d4d4d8 1px, transparent 1px);",
+      "  background-size: 24px 24px;",
+      "}"
     ].join("\n");
 
     var style = document.createElement("style");
@@ -341,6 +355,13 @@
 
         self.currentSrc = src;
 
+        // Infinite-canvas mode: caller asked for unclamped pan/zoom so
+        // overlays (e.g. Etcher annotations) can extend beyond the
+        // image into the surrounding void. Off by default — every
+        // existing consumer keeps the stock "image fills viewport"
+        // clamps.
+        var infiniteCanvas = self.el.dataset.infiniteCanvas === "true";
+
         self.viewer = window.OpenSeadragon({
           element: self.el,
           tileSources: resolveTileSource(src),
@@ -359,9 +380,13 @@
           maxZoomPixelRatio: 8,
 
           // Clamp the image to the viewer rectangle — no off-screen drift,
-          // no half-image floating in empty space.
-          visibilityRatio: 1.0,
-          constrainDuringPan: true,
+          // no half-image floating in empty space. Infinite-canvas mode
+          // releases both clamps and lowers the zoom-out floor so the
+          // image can shrink to a thumbnail in the middle of empty
+          // canvas.
+          visibilityRatio: infiniteCanvas ? 0 : 1.0,
+          constrainDuringPan: !infiniteCanvas,
+          minZoomImageRatio: infiniteCanvas ? 0.05 : 0.9,
 
           gestureSettingsTouch: { pinchToZoom: true, dragToPan: true },
           gestureSettingsMouse: {
