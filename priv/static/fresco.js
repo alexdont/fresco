@@ -367,7 +367,9 @@
           gestureSettingsMouse: {
             scrollToZoom: true,
             dragToPan: true,
-            clickToZoom: true,
+            // Single-click should select / annotate, not zoom. Zooming
+            // by mouse is double-click (here) or scroll wheel.
+            clickToZoom: false,
             dblClickToZoom: true
           }
         });
