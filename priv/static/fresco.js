@@ -296,14 +296,27 @@
       // Append a button to Fresco's nav column (below the existing four:
       // zoom-in, zoom-out, reset, fullscreen). Used by extensions like
       // Etcher to add tool toggles. Returns an unsubscribe function that
-      // removes the button on cleanup.
+      // removes the button on cleanup. The returned function carries a
+      // few helpers as properties for callers that want to mutate the
+      // button after creation:
+      //
+      //   .setIcon(svgString) — replace the inner SVG.
+      //   .setTitle(text)     — update the tooltip + aria-label.
+      //   .el                 — the underlying <button> element.
       appendNavButton: function(svg, title, onClick) {
         if (!navEl) return function noop() {};
         var btn = makeButton(svg, title, onClick);
         navEl.appendChild(btn);
-        return function removeButton() {
+        var remove = function removeButton() {
           if (btn.parentNode === navEl) navEl.removeChild(btn);
         };
+        remove.setIcon = function(nextSvg) { btn.innerHTML = nextSvg; };
+        remove.setTitle = function(nextTitle) {
+          btn.title = nextTitle;
+          btn.setAttribute("aria-label", nextTitle);
+        };
+        remove.el = btn;
+        return remove;
       }
     };
   }
