@@ -4,6 +4,37 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.5 — 2026-05-15
+
+One additive feature — a fourth `:theme` value, `:inherit`, that lets
+the parent app drive Fresco's palette via the existing `--fresco-*`
+CSS custom properties. Use it to wire the viewer to a parent theme
+system (daisyUI, Tailwind, custom palettes) so background, dot grid,
+and nav buttons follow the parent theme as it changes. Fully
+backwards compatible — existing `:system`/`:light`/`:dark` viewers
+behave exactly as in 0.1.4.
+
+### Added
+
+- New `:inherit` value on `Fresco.viewer`'s `:theme` attribute. When
+  set, Fresco emits `data-fresco-theme="inherit"` on the host div
+  and **skips its own var declarations** for that viewer — the six
+  `--fresco-*` properties stay unset until the parent app's CSS
+  defines them. Pair with a CSS rule on
+  `.fresco-viewer[data-fresco-theme="inherit"]` mapping the
+  variables to the parent's theme tokens. The structural styles
+  (background-color + dot grid pattern) still apply; only the color
+  values come from the parent.
+
+### Changed
+
+- The base `.fresco-viewer { --fresco-bg: …; … }` rule is now scoped
+  to `.fresco-viewer:not([data-fresco-theme="inherit"])` so it
+  doesn't fight the parent's vars. The `@media (prefers-color-scheme:
+  dark)` branch picks up the same `:not()` exclusion. Visible only
+  to consumers who pass `theme={:inherit}`; everything else stays
+  the same.
+
 ## 0.1.4 — 2026-05-14
 
 Three additive features — opt-in 90° rotation, multi-image canvas

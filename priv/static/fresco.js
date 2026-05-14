@@ -192,25 +192,40 @@
       // them when the host is in `theme: :system` mode (the default)
       // or `theme: :dark`. Explicit `[data-fresco-theme="light"]` /
       // `["dark"]` rules below force a fixed palette regardless of
-      // OS preference. Parent apps (daisyUI, custom palettes) can
-      // override any of these vars on `.fresco-viewer` in their own
-      // CSS — typically by mapping to their own theme tokens.
-      ".fresco-viewer {",
+      // OS preference.
+      //
+      // `theme: :inherit` mode opts the viewer OUT of Fresco's own
+      // var declarations entirely — both the base rule and the
+      // `@media` branch exclude it. The parent app's CSS supplies the
+      // six `--fresco-*` values (typically mapped to daisyUI or other
+      // theme tokens). The structural rule below (background-color +
+      // dot grid) applies to every viewer regardless of theme, so an
+      // `:inherit` viewer still renders the canvas backdrop using
+      // whatever colors the parent provides.
+      ".fresco-viewer:not([data-fresco-theme=\"inherit\"]) {",
       "  --fresco-bg: #fafafa;",
       "  --fresco-grid-dot: #d4d4d8;",
       "  --fresco-nav-bg: rgba(0, 0, 0, 0.55);",
       "  --fresco-nav-bg-hover: rgba(0, 0, 0, 0.78);",
       "  --fresco-nav-fg: #fff;",
       "  --fresco-nav-focus: rgba(255, 255, 255, 0.7);",
+      "}",
+      // Structural styles — apply to every viewer regardless of
+      // theme mode. The vars are sourced from either Fresco's own
+      // declarations (above + the branches below) or from the
+      // parent app's CSS in `:inherit` mode.
+      ".fresco-viewer {",
       "  background-color: var(--fresco-bg);",
       "  background-image: radial-gradient(circle, var(--fresco-grid-dot) 1px, transparent 1px);",
       "  background-size: 24px 24px;",
       "}",
       // System mode: follow OS preference. Excluded when the host
-      // explicitly opts into light via data-fresco-theme="light", so
-      // a forced-light viewer stays light on a dark-OS machine.
+      // explicitly opts into light via data-fresco-theme="light", or
+      // into inherit (parent-driven) via "inherit". A forced-light
+      // viewer stays light on a dark-OS machine, and an inherit
+      // viewer keeps the parent's palette regardless of OS.
       "@media (prefers-color-scheme: dark) {",
-      "  .fresco-viewer:not([data-fresco-theme=\"light\"]) {",
+      "  .fresco-viewer:not([data-fresco-theme=\"light\"]):not([data-fresco-theme=\"inherit\"]) {",
       "    --fresco-bg: #0a0a0a;",
       "    --fresco-grid-dot: #262626;",
       "    --fresco-nav-bg: rgba(255, 255, 255, 0.12);",

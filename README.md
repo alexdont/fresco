@@ -120,7 +120,7 @@ Default is `rotate={false}` — every existing viewer keeps the stock four-butto
 
 ---
 
-## Theming (light / dark / system)
+## Theming (light / dark / system / inherit)
 
 Fresco ships with light + dark palettes for the viewer host background, dot grid, and nav buttons. Pass `:theme` to pick one:
 
@@ -136,6 +136,7 @@ Fresco ships with light + dark palettes for the viewer host background, dot grid
 - `:system` (default) — follow the OS / browser `prefers-color-scheme`.
 - `:light` — force light palette regardless of OS preference.
 - `:dark` — force dark palette regardless of OS preference.
+- `:inherit` — emit only the host structure; the parent app's CSS supplies the palette. Use this to follow a parent theme system (see below).
 
 Theming is implemented as CSS custom properties on `.fresco-viewer`:
 
@@ -150,18 +151,29 @@ Theming is implemented as CSS custom properties on `.fresco-viewer`:
 
 ### Integrating with a parent theme system (daisyUI, Tailwind, custom palettes)
 
-Fresco stays independent of any specific theme system. To wire it to a parent palette, override the variables on `.fresco-viewer` in your own CSS. Example for daisyUI:
+Pass `theme={:inherit}` and define the variables on `.fresco-viewer[data-fresco-theme="inherit"]` in your own CSS. Fresco skips its own var declarations for inherit-mode viewers, so the parent's values land directly. Example for daisyUI:
+
+```heex
+<Fresco.viewer
+  id="photo"
+  src={~p"/uploads/photo.jpg"}
+  class="w-full h-[80vh] rounded"
+  theme={:inherit}
+/>
+```
 
 ```css
-.fresco-viewer {
+.fresco-viewer[data-fresco-theme="inherit"] {
   --fresco-bg: var(--color-base-100);
   --fresco-grid-dot: var(--color-base-300);
   --fresco-nav-bg: var(--color-neutral);
+  --fresco-nav-bg-hover: var(--color-base-content);
   --fresco-nav-fg: var(--color-neutral-content);
+  --fresco-nav-focus: var(--color-primary);
 }
 ```
 
-With that block in your `app.css`, every Fresco viewer follows whichever daisyUI theme is active on `<html>` — no fresco-side change needed.
+With that block in your `app.css`, every inherit-mode Fresco viewer follows whichever daisyUI theme is active on `<html>` — flipping `data-theme` flips the daisyUI vars, which flip Fresco's. The selector matches Fresco's other theme branches at specificity 20, so the override always wins.
 
 ---
 

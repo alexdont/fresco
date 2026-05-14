@@ -124,7 +124,7 @@ defmodule Fresco.Viewer do
   )
 
   attr(:theme, :atom,
-    values: [:system, :light, :dark],
+    values: [:system, :light, :dark, :inherit],
     default: :system,
     doc: """
     Color scheme for the viewer host background, dot grid, and nav
@@ -133,13 +133,18 @@ defmodule Fresco.Viewer do
     - `:system` (default) — follow the OS / browser `prefers-color-scheme`.
     - `:light` — force light palette regardless of OS preference.
     - `:dark` — force dark palette regardless of OS preference.
+    - `:inherit` — emit only the host structure; the parent app's CSS
+      supplies the six `--fresco-*` custom properties. Use this to wire
+      Fresco to a parent theme system (daisyUI, custom palettes, …) so
+      its background, grid, and nav follow the parent theme. The
+      variables flip automatically as the parent theme changes.
 
     Theming is implemented as CSS custom properties on `.fresco-viewer`
     (`--fresco-bg`, `--fresco-grid-dot`, `--fresco-nav-bg`,
     `--fresco-nav-bg-hover`, `--fresco-nav-fg`, `--fresco-nav-focus`).
-    Override them in your own CSS to integrate with a parent theme
-    system (daisyUI, custom palettes, etc.) — see the Theming section
-    of the README.
+    With `:system`/`:light`/`:dark`, Fresco supplies the values. With
+    `:inherit`, the parent app does — see the Theming section of the
+    README for the daisyUI mapping example.
     """
   )
 
