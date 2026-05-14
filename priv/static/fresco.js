@@ -168,13 +168,13 @@
       "  width: 36px; height: 36px;",
       "  display: inline-flex; align-items: center; justify-content: center;",
       "  border: none; padding: 0; cursor: pointer;",
-      "  background: rgba(0, 0, 0, 0.55); color: #fff;",
+      "  background: var(--fresco-nav-bg); color: var(--fresco-nav-fg);",
       "  border-radius: 8px;",
       "  transition: background 120ms ease;",
       "}",
-      ".fresco-nav button:hover { background: rgba(0, 0, 0, 0.78); }",
+      ".fresco-nav button:hover { background: var(--fresco-nav-bg-hover); }",
       ".fresco-nav button:focus-visible {",
-      "  outline: 2px solid rgba(255, 255, 255, 0.7); outline-offset: 1px;",
+      "  outline: 2px solid var(--fresco-nav-focus); outline-offset: 1px;",
       "}",
       ".fresco-nav svg { width: 18px; height: 18px; }",
       // Subtle dot grid on every Fresco viewer's host element. In
@@ -184,12 +184,64 @@
       // around the image so users can tell they're on a canvas,
       // not in empty space. Fixed at 24×24 screen pixels so the
       // spacing stays constant regardless of zoom — same approach
-      // Figma / Miro use. Override `.fresco-viewer` in your own
-      // CSS for dark mode or a different accent.
+      // Figma / Miro use.
+      //
+      // Theming: the six `--fresco-*` custom properties below are the
+      // entire palette surface. Defaults are light (matches the
+      // original look). The `prefers-color-scheme: dark` block flips
+      // them when the host is in `theme: :system` mode (the default)
+      // or `theme: :dark`. Explicit `[data-fresco-theme="light"]` /
+      // `["dark"]` rules below force a fixed palette regardless of
+      // OS preference. Parent apps (daisyUI, custom palettes) can
+      // override any of these vars on `.fresco-viewer` in their own
+      // CSS — typically by mapping to their own theme tokens.
       ".fresco-viewer {",
-      "  background-color: #fafafa;",
-      "  background-image: radial-gradient(circle, #d4d4d8 1px, transparent 1px);",
+      "  --fresco-bg: #fafafa;",
+      "  --fresco-grid-dot: #d4d4d8;",
+      "  --fresco-nav-bg: rgba(0, 0, 0, 0.55);",
+      "  --fresco-nav-bg-hover: rgba(0, 0, 0, 0.78);",
+      "  --fresco-nav-fg: #fff;",
+      "  --fresco-nav-focus: rgba(255, 255, 255, 0.7);",
+      "  background-color: var(--fresco-bg);",
+      "  background-image: radial-gradient(circle, var(--fresco-grid-dot) 1px, transparent 1px);",
       "  background-size: 24px 24px;",
+      "}",
+      // System mode: follow OS preference. Excluded when the host
+      // explicitly opts into light via data-fresco-theme="light", so
+      // a forced-light viewer stays light on a dark-OS machine.
+      "@media (prefers-color-scheme: dark) {",
+      "  .fresco-viewer:not([data-fresco-theme=\"light\"]) {",
+      "    --fresco-bg: #0a0a0a;",
+      "    --fresco-grid-dot: #262626;",
+      "    --fresco-nav-bg: rgba(255, 255, 255, 0.12);",
+      "    --fresco-nav-bg-hover: rgba(255, 255, 255, 0.20);",
+      "    --fresco-nav-fg: #fff;",
+      "    --fresco-nav-focus: rgba(255, 255, 255, 0.7);",
+      "  }",
+      "}",
+      // Explicit dark: forces dark regardless of OS preference. The
+      // attribute selector has the same specificity as the media
+      // query rule above, but the media-query rule excludes
+      // `[data-fresco-theme=\"light\"]`, so an explicit dark
+      // override here also wins on a light-OS machine.
+      ".fresco-viewer[data-fresco-theme=\"dark\"] {",
+      "  --fresco-bg: #0a0a0a;",
+      "  --fresco-grid-dot: #262626;",
+      "  --fresco-nav-bg: rgba(255, 255, 255, 0.12);",
+      "  --fresco-nav-bg-hover: rgba(255, 255, 255, 0.20);",
+      "  --fresco-nav-fg: #fff;",
+      "  --fresco-nav-focus: rgba(255, 255, 255, 0.7);",
+      "}",
+      // Explicit light: redundant with the base defaults, but spelled
+      // out so the rule reads symmetrically and so future palette
+      // tweaks don't accidentally desync the two.
+      ".fresco-viewer[data-fresco-theme=\"light\"] {",
+      "  --fresco-bg: #fafafa;",
+      "  --fresco-grid-dot: #d4d4d8;",
+      "  --fresco-nav-bg: rgba(0, 0, 0, 0.55);",
+      "  --fresco-nav-bg-hover: rgba(0, 0, 0, 0.78);",
+      "  --fresco-nav-fg: #fff;",
+      "  --fresco-nav-focus: rgba(255, 255, 255, 0.7);",
       "}"
     ].join("\n");
 

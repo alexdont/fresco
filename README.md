@@ -120,6 +120,51 @@ Default is `rotate={false}` — every existing viewer keeps the stock four-butto
 
 ---
 
+## Theming (light / dark / system)
+
+Fresco ships with light + dark palettes for the viewer host background, dot grid, and nav buttons. Pass `:theme` to pick one:
+
+```heex
+<Fresco.viewer
+  id="photo"
+  src={~p"/uploads/photo.jpg"}
+  class="w-full h-[80vh] rounded"
+  theme={:system}
+/>
+```
+
+- `:system` (default) — follow the OS / browser `prefers-color-scheme`.
+- `:light` — force light palette regardless of OS preference.
+- `:dark` — force dark palette regardless of OS preference.
+
+Theming is implemented as CSS custom properties on `.fresco-viewer`:
+
+| Variable | Purpose |
+|---|---|
+| `--fresco-bg` | Host background color |
+| `--fresco-grid-dot` | Dot grid color |
+| `--fresco-nav-bg` | Nav button background |
+| `--fresco-nav-bg-hover` | Nav button hover background |
+| `--fresco-nav-fg` | Nav button icon color |
+| `--fresco-nav-focus` | Focus-ring color |
+
+### Integrating with a parent theme system (daisyUI, Tailwind, custom palettes)
+
+Fresco stays independent of any specific theme system. To wire it to a parent palette, override the variables on `.fresco-viewer` in your own CSS. Example for daisyUI:
+
+```css
+.fresco-viewer {
+  --fresco-bg: var(--color-base-100);
+  --fresco-grid-dot: var(--color-base-300);
+  --fresco-nav-bg: var(--color-neutral);
+  --fresco-nav-fg: var(--color-neutral-content);
+}
+```
+
+With that block in your `app.css`, every Fresco viewer follows whichever daisyUI theme is active on `<html>` — no fresco-side change needed.
+
+---
+
 ## Use it as a foundation for extensions
 
 Fresco publishes each live viewer to `window.Fresco.viewerFor(domId)`. Peer libraries (Tessera for deep zoom, future Etcher for annotations, etc.) look up the handle and attach without forking the viewer.

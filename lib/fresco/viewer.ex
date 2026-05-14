@@ -123,6 +123,26 @@ defmodule Fresco.Viewer do
     """
   )
 
+  attr(:theme, :atom,
+    values: [:system, :light, :dark],
+    default: :system,
+    doc: """
+    Color scheme for the viewer host background, dot grid, and nav
+    buttons.
+
+    - `:system` (default) — follow the OS / browser `prefers-color-scheme`.
+    - `:light` — force light palette regardless of OS preference.
+    - `:dark` — force dark palette regardless of OS preference.
+
+    Theming is implemented as CSS custom properties on `.fresco-viewer`
+    (`--fresco-bg`, `--fresco-grid-dot`, `--fresco-nav-bg`,
+    `--fresco-nav-bg-hover`, `--fresco-nav-fg`, `--fresco-nav-focus`).
+    Override them in your own CSS to integrate with a parent theme
+    system (daisyUI, custom palettes, etc.) — see the Theming section
+    of the README.
+    """
+  )
+
   attr(:rest, :global)
 
   @doc """
@@ -146,6 +166,7 @@ defmodule Fresco.Viewer do
       data-sources={@sources_json}
       data-infinite-canvas={to_string(@infinite_canvas)}
       data-rotate={to_string(@rotate)}
+      data-fresco-theme={to_string(@theme)}
       class={[
         "fresco-viewer",
         @class,
