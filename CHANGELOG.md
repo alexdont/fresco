@@ -4,6 +4,56 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.4 — 2026-05-14
+
+Three additive features — opt-in 90° rotation, multi-image canvas
+layout, and light/dark/system theming. The API surface stays
+backwards-compatible (all existing attrs unchanged, all new attrs
+have defaults), but the new `:theme` defaults to `:system`, which
+means viewers on dark-OS machines will now follow
+`prefers-color-scheme` and render dark by default. Pass
+`theme={:light}` to lock to the old always-light look.
+
+### Added
+
+- New `:rotate` attribute on `Fresco.viewer` (defaults to `false`).
+  When `true`, appends a 90°-clockwise rotation button between the
+  Fullscreen and Zoom-in icons. Rotation is tracked independently
+  of zoom/pan — "Reset view" deliberately doesn't undo it.
+- New `:sources` attribute for laying multiple images out on one
+  canvas. Each entry is a `%{src, x, y, width}` map in viewport
+  units; the first image conventionally anchors the layout at
+  `width: 1`, so `x: 1.1` puts the next image just to the right.
+  Heights derive from each image's natural aspect ratio. Each
+  entry's `src` runs through the same source-provider chain as
+  `:src`, so plain images and DZI tile pyramids (via Tessera) can
+  be mixed on a single viewer. Live re-renders that change the
+  list re-open the viewer while preserving the current zoom/pan.
+- `:src` is now optional. At least one of `:src` or `:sources`
+  must be given; the component raises otherwise. Existing
+  single-image callers keep working unchanged.
+- New `:theme` attribute — `:system` (default), `:light`, or
+  `:dark`. Plumbed to `data-fresco-theme` on the host div.
+  `:system` follows the OS via `prefers-color-scheme`; the other
+  two force a fixed palette regardless of OS preference.
+- Six CSS custom properties on `.fresco-viewer` expose the entire
+  palette surface: `--fresco-bg`, `--fresco-grid-dot`,
+  `--fresco-nav-bg`, `--fresco-nav-bg-hover`, `--fresco-nav-fg`,
+  `--fresco-nav-focus`. Override them in user CSS to wire fresco
+  to a parent theme system (daisyUI, Tailwind, custom palettes) —
+  README has a daisyUI mapping example.
+
+### Changed
+
+- Default viewer rendering follows `prefers-color-scheme` (`:theme`
+  defaults to `:system`). Viewers on dark-OS machines that
+  previously rendered light will now render dark unless explicitly
+  pinned via `theme={:light}` or an inherited explicit theme.
+- `handle.imageToScreen` / `handle.screenToImage` continue to
+  operate on the first source when multiple are present.
+  Multi-image coordinate disambiguation is planned but not yet
+  implemented.
+
 ## 0.1.3 — 2026-05-14
 
 Opt-in infinite-canvas mode + a default dot-grid background. No
