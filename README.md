@@ -74,7 +74,32 @@ What changes when `infinite_canvas` is on:
 
 The home button (`reset zoom`) still returns to "image fits viewport" — the image stays the anchor point, just no longer the cage. Default is `infinite_canvas={false}`, so every existing viewer keeps the stock clamped behavior with no template changes required.
 
-> **Future API:** A planned `:sources` attribute will accept a list of `[%{src: "...", offset: {x, y}}]` for placing multiple images on the same canvas. The current `:src` will continue to work as a single-image shortcut — no migration required.
+---
+
+## Multiple images on one canvas
+
+Pass `:sources` (a list of maps) instead of `:src` to lay multiple images out on the same viewer. Each entry has `src` plus optional `x`, `y`, `width` in viewport units. The first image conventionally anchors the layout at `x: 0, y: 0, width: 1`, so `x: 1.1` means "just to the right with a 10% gap."
+
+```heex
+<Fresco.viewer
+  id="gallery"
+  sources={[
+    %{src: "/uploads/a.jpg"},
+    %{src: "/uploads/b.jpg", x: 1.1},
+    %{src: "/uploads/c.jpg", x: 0, y: 1.1, width: 0.8}
+  ]}
+  class="w-full h-[80vh] rounded"
+  infinite_canvas
+/>
+```
+
+- Height is derived from each image's natural aspect ratio — don't specify it.
+- Each entry's `src` runs through the same source-provider chain as the single-image `:src`, so you can mix plain images with DZI tile pyramids handled by Tessera.
+- `:src` and `:sources` are mutually exclusive in practice — pass one. Both given, `:sources` wins.
+- Typically paired with `:infinite_canvas` so the user can pan freely across the layout. Without it, "Reset view" fits all sources into the viewport at mount.
+- Live re-renders that change the `:sources` list re-open the viewer while preserving the current zoom/pan — same trick as `swapSourcePreservingBounds`.
+
+> **Caveat:** `handle.imageToScreen` / `screenToImage` currently operate on the first source. Multi-image coordinate disambiguation is planned but not yet implemented.
 
 ---
 

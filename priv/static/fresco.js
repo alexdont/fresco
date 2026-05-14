@@ -79,6 +79,36 @@
     return { type: "image", url: url };
   }
 
+  // Build OSD's "positioned source" wrapper from a single :sources
+  // entry. Each entry's `src` flows through the provider chain so
+  // mixed-format layouts (plain image + DZI pyramid) work transparently.
+  // Defaults match the Elixir attr docs: x=0, y=0, width=1 in viewport
+  // units, with the first image conventionally anchoring the
+  // coordinate system at width=1.
+  function buildMultiSource(entry) {
+    return {
+      tileSource: resolveTileSource(entry.src),
+      x: typeof entry.x === "number" ? entry.x : 0,
+      y: typeof entry.y === "number" ? entry.y : 0,
+      width: typeof entry.width === "number" ? entry.width : 1
+    };
+  }
+
+  // Parse a JSON-encoded :sources payload into an OSD tileSources array.
+  // Returns null if the payload is empty or malformed (JS falls back
+  // to data-src in that case).
+  function parseSourcesJson(json) {
+    if (!json) return null;
+    try {
+      var parsed = JSON.parse(json);
+      if (!Array.isArray(parsed) || parsed.length === 0) return null;
+      return parsed.map(buildMultiSource);
+    } catch (e) {
+      console.warn("[Fresco] Malformed data-sources JSON", e);
+      return null;
+    }
+  }
+
   window.Fresco = {
     viewerFor: function(domId) {
       return viewerRegistry[domId] || null;
@@ -361,12 +391,21 @@
         if (!self.el.isConnected) return;
 
         var src = self.el.dataset.src;
-        if (!src) {
-          console.warn("[Fresco] Missing data-src on element", self.el);
+        var sourcesJson = self.el.dataset.sources;
+        var multiSources = parseSourcesJson(sourcesJson);
+
+        if (!multiSources && !src) {
+          console.warn(
+            "[Fresco] Element has neither data-src nor a valid data-sources payload",
+            self.el
+          );
           return;
         }
 
+        // Track both shapes for the `updated` hook: live re-renders
+        // may swap either single-source or multi-source payloads.
         self.currentSrc = src;
+        self.currentSourcesJson = multiSources ? sourcesJson : null;
 
         // Infinite-canvas mode: caller asked for unclamped pan/zoom so
         // overlays (e.g. Etcher annotations) can extend beyond the
@@ -376,9 +415,14 @@
         var infiniteCanvas = self.el.dataset.infiniteCanvas === "true";
         var rotateEnabled = self.el.dataset.rotate === "true";
 
+        // data-sources wins when present, otherwise the legacy
+        // single-image data-src path. resolveTileSource still flows
+        // through provider chain for both.
+        var tileSources = multiSources || resolveTileSource(src);
+
         self.viewer = window.OpenSeadragon({
           element: self.el,
-          tileSources: resolveTileSource(src),
+          tileSources: tileSources,
 
           // Our Heroicons overlay replaces the built-in PNG-sprite nav.
           showNavigationControl: false,
@@ -427,6 +471,25 @@
 
     updated: function() {
       if (!this.viewer) return;
+
+      // Multi-source swap takes precedence: if data-sources changed,
+      // re-open with the new layout while preserving the current
+      // viewport (same bounds-preservation trick as single-source).
+      var newSourcesJson = this.el.dataset.sources;
+      if (newSourcesJson && newSourcesJson !== this.currentSourcesJson) {
+        var tileSources = parseSourcesJson(newSourcesJson);
+        if (tileSources) {
+          this.currentSourcesJson = newSourcesJson;
+          var keepBounds = this.viewer.viewport.getBounds();
+          var viewer = this.viewer;
+          viewer.addOnceHandler("open", function() {
+            try { viewer.viewport.fitBounds(keepBounds, true); } catch (_) {}
+          });
+          try { viewer.open(tileSources); } catch (_) {}
+          return;
+        }
+      }
+
       var newSrc = this.el.dataset.src;
       if (newSrc && newSrc !== this.currentSrc) {
         this.currentSrc = newSrc;

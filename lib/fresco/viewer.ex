@@ -45,12 +45,47 @@ defmodule Fresco.Viewer do
   attr(:id, :string, required: true, doc: "DOM id; must be unique on the page.")
 
   attr(:src, :string,
-    required: true,
+    default: nil,
     doc: """
-    URL of the image to display. Default behavior treats it as a plain image
-    (`.jpg`, `.png`, `.webp`, etc.). Source providers registered via
-    `window.Fresco.registerSourceProvider/2` can intercept specific URL
-    patterns (e.g., Tessera handles `.dzi` manifests).
+    URL of a single image to display — shortcut for one-image viewers.
+    Treated as a plain image (`.jpg`, `.png`, `.webp`, etc.) by default;
+    source providers registered via `window.Fresco.registerSourceProvider/2`
+    can intercept specific URL patterns (e.g., Tessera handles `.dzi`
+    manifests).
+
+    Exactly one of `:src` or `:sources` is required. If both are
+    given, `:sources` wins and `:src` is ignored.
+    """
+  )
+
+  attr(:sources, :list,
+    default: [],
+    doc: """
+    List of images to lay out on a shared canvas. Each entry is a map:
+
+        %{
+          src: "/uploads/a.jpg",   # required — image URL
+          x: 0.0,                  # optional — horizontal offset in viewport units (default 0)
+          y: 0.0,                  # optional — vertical offset in viewport units (default 0)
+          width: 1.0               # optional — width in viewport units (default 1)
+        }
+
+    Viewport units: the *first* image is conventionally placed at
+    `x: 0, y: 0` with `width: 1`. So `x: 1.1` puts the next image just
+    to the right with a 10% gap. Height is derived from the image's
+    natural aspect ratio — you don't specify it.
+
+    Each entry's `src` runs through the same source-provider chain as
+    the single-image `:src`, so a multi-image viewer can mix plain
+    images with DZI tile pyramids handled by Tessera.
+
+    Typically paired with `:infinite_canvas` so the user can pan
+    freely across the layout. Without it, OSD will fit-to-viewport
+    over the bounding box of all sources at mount.
+
+    Note: `handle.imageToScreen` / `screenToImage` currently operate
+    on the first source only. Multi-image coordinate disambiguation
+    is planned but not yet implemented.
     """
   )
 
@@ -71,10 +106,8 @@ defmodule Fresco.Viewer do
     around the image because their coordinate math already supports
     out-of-bounds image-pixel values.
 
-    **Future API:** A planned `:sources` attribute will accept a list
-    like `[%{src: "...", offset: {x, y}}]` for placing multiple images
-    on the same canvas. The current `:src` will continue to work as a
-    single-image shortcut — no migration required.
+    Pairs naturally with `:sources` to lay multiple images out on
+    the same canvas, Figma/Miro style.
     """
   )
 
@@ -93,18 +126,24 @@ defmodule Fresco.Viewer do
   attr(:rest, :global)
 
   @doc """
-  Renders a Fresco viewer for the given image source.
+  Renders a Fresco viewer for the given image source(s).
 
   Companion JS hook lazy-loads OpenSeadragon, mounts the viewer, attaches
   the nav overlay, and publishes the handle for peer extensions.
   """
   def viewer(assigns) do
+    assigns =
+      assigns
+      |> validate_sources!()
+      |> assign_sources_json()
+
     ~H"""
     <div
       id={@id}
       phx-hook="FrescoViewer"
       phx-update="ignore"
       data-src={@src}
+      data-sources={@sources_json}
       data-infinite-canvas={to_string(@infinite_canvas)}
       data-rotate={to_string(@rotate)}
       class={[
@@ -116,5 +155,22 @@ defmodule Fresco.Viewer do
     >
     </div>
     """
+  end
+
+  defp validate_sources!(%{src: nil, sources: []}) do
+    raise ArgumentError,
+          "Fresco.viewer requires either :src (single image) or a non-empty :sources list"
+  end
+
+  defp validate_sources!(assigns), do: assigns
+
+  # JSON-encoded only when :sources is non-empty; otherwise nil so the
+  # data-sources attribute is omitted from the rendered div and the JS
+  # hook falls back to data-src.
+  defp assign_sources_json(%{sources: []} = assigns),
+    do: Phoenix.Component.assign(assigns, :sources_json, nil)
+
+  defp assign_sources_json(%{sources: sources} = assigns) do
+    Phoenix.Component.assign(assigns, :sources_json, Jason.encode!(sources))
   end
 end
