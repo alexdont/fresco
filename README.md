@@ -78,6 +78,23 @@ The home button (`reset zoom`) still returns to "image fits viewport" — the im
 
 ---
 
+## Rotation
+
+Opt-in 90° rotation button. Adds a fifth icon to the nav column that rotates the image 90° clockwise each click. Rotation is tracked independently of zoom/pan, so "Reset view" recenters without un-rotating.
+
+```heex
+<Fresco.viewer
+  id="photo"
+  src={~p"/uploads/photo.jpg"}
+  class="w-full h-[80vh] rounded"
+  rotate
+/>
+```
+
+Default is `rotate={false}` — every existing viewer keeps the stock four-button layout.
+
+---
+
 ## Use it as a foundation for extensions
 
 Fresco publishes each live viewer to `window.Fresco.viewerFor(domId)`. Peer libraries (Tessera for deep zoom, future Etcher for annotations, etc.) look up the handle and attach without forking the viewer.

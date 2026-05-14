@@ -119,7 +119,8 @@
     zoomIn:  '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607ZM10.5 7.5v6m3-3h-6"/></svg>',
     zoomOut: '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607ZM13.5 10.5h-6"/></svg>',
     reset:   '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>',
-    expand:  '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15"/></svg>'
+    expand:  '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15"/></svg>',
+    rotate:  '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 12c0-1.232-.046-2.453-.138-3.662a4.006 4.006 0 0 0-3.7-3.7 48.678 48.678 0 0 0-7.324 0 4.006 4.006 0 0 0-3.7 3.7c-.017.22-.032.441-.046.662M19.5 12l3-3m-3 3-3-3m-12 3c0 1.232.046 2.453.138 3.662a4.006 4.006 0 0 0 3.7 3.7 48.656 48.656 0 0 0 7.324 0 4.006 4.006 0 0 0 3.7-3.7c.017-.22.032-.441.046-.662M4.5 12l3 3m-3-3-3 3"/></svg>'
   };
 
   var stylesInjected = false;
@@ -182,7 +183,7 @@
     return btn;
   }
 
-  function buildNav(viewer, container) {
+  function buildNav(viewer, container, opts) {
     injectStyles();
 
     var nav = document.createElement("div");
@@ -196,6 +197,18 @@
     nav.appendChild(makeButton(ICONS.expand, "Toggle fullscreen", function() {
       viewer.setFullPage(!viewer.isFullPage());
     }));
+
+    // Opt-in rotation. 90° clockwise per click, tracked independently of
+    // zoom/pan — "Reset view" deliberately doesn't undo rotation, so a
+    // rotated image stays rotated when the user re-centers it. Sits
+    // between fullscreen and zoom-in so rotation lives with "view
+    // orientation" controls, not with "zoom level" controls.
+    if (opts && opts.rotate) {
+      nav.appendChild(makeButton(ICONS.rotate, "Rotate 90°", function() {
+        var current = viewer.viewport.getRotation();
+        viewer.viewport.setRotation((current + 90) % 360);
+      }));
+    }
 
     nav.appendChild(makeButton(ICONS.zoomIn, "Zoom in", function() {
       viewer.viewport.zoomBy(zoomFactor);
@@ -361,6 +374,7 @@
         // existing consumer keeps the stock "image fills viewport"
         // clamps.
         var infiniteCanvas = self.el.dataset.infiniteCanvas === "true";
+        var rotateEnabled = self.el.dataset.rotate === "true";
 
         self.viewer = window.OpenSeadragon({
           element: self.el,
@@ -399,8 +413,9 @@
           }
         });
 
-        // Built-in nav overlay (zoom in/out/home/fullscreen).
-        self.nav = buildNav(self.viewer, self.el);
+        // Built-in nav overlay (zoom in/out/home/fullscreen, plus
+        // optional rotate when the host opted in).
+        self.nav = buildNav(self.viewer, self.el, { rotate: rotateEnabled });
 
         // Publish the handle so extensions can attach. The nav element is
         // passed through so extensions can append their own buttons via

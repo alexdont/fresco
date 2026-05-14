@@ -78,6 +78,18 @@ defmodule Fresco.Viewer do
     """
   )
 
+  attr(:rotate, :boolean,
+    default: false,
+    doc: """
+    When `true`, appends a rotation button to the nav overlay that rotates
+    the image 90° clockwise on each click. Rotation persists across
+    "Reset view" — it's tracked independently of zoom/pan. Default
+    `false` keeps the four-button stock nav layout. Opt-in like
+    `:infinite_canvas` so existing consumers aren't surprised by an
+    extra button.
+    """
+  )
+
   attr(:rest, :global)
 
   @doc """
@@ -94,6 +106,7 @@ defmodule Fresco.Viewer do
       phx-update="ignore"
       data-src={@src}
       data-infinite-canvas={to_string(@infinite_canvas)}
+      data-rotate={to_string(@rotate)}
       class={[
         "fresco-viewer",
         @class,
