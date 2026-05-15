@@ -114,7 +114,7 @@ defmodule Fresco.Viewer do
   attr(:rotate, :boolean,
     default: false,
     doc: """
-    When `true`, appends a rotation button to the nav overlay that rotates
+    When `true`, appends a fifth button to the nav overlay that rotates
     the image 90° clockwise on each click. Rotation persists across
     "Reset view" — it's tracked independently of zoom/pan. Default
     `false` keeps the four-button stock nav layout. Opt-in like

@@ -32,6 +32,10 @@
   // Lazy OSD load
   // ===========================================================================
 
+  // OpenSeadragon — pinned to a known-good 4.1.x. Bump this version
+  // string intentionally after validating against the new release;
+  // the URL is a CDN, so a silent upstream change shouldn't surprise
+  // viewers in the wild.
   var OSD_VERSION = "4.1.0";
   var OSD_CDN = "https://cdn.jsdelivr.net/npm/openseadragon@" + OSD_VERSION +
                 "/build/openseadragon/openseadragon.min.js";

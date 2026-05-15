@@ -26,6 +26,8 @@ let liveSocket = new LiveSocket("/live", Socket, {
 })
 ```
 
+The hook name is `FrescoViewer` — if you maintain an explicit hooks map instead of spreading `window.FrescoHooks`, register it as `{ FrescoViewer: window.FrescoHooks.FrescoViewer }`.
+
 OpenSeadragon is lazy-loaded from jsDelivr on first viewer mount — no extra `<script>` tags needed.
 
 ---
@@ -99,13 +101,13 @@ Pass `:sources` (a list of maps) instead of `:src` to lay multiple images out on
 - Typically paired with `:infinite_canvas` so the user can pan freely across the layout. Without it, "Reset view" fits all sources into the viewport at mount.
 - Live re-renders that change the `:sources` list re-open the viewer while preserving the current zoom/pan — same trick as `swapSourcePreservingBounds`.
 
-> **Caveat:** `handle.imageToScreen` / `screenToImage` currently operate on the first source. Multi-image coordinate disambiguation is planned but not yet implemented.
+> ⚠️ **Caveat:** `handle.imageToScreen` / `screenToImage` currently operate on the **first source only**. If you're building an extension that needs to address pixels in source #2+ (e.g. annotations on a second image in the layout), you'll need to apply the offset yourself for now. Multi-image coordinate disambiguation is planned but not yet implemented.
 
 ---
 
 ## Rotation
 
-Opt-in 90° rotation button. Adds a fifth icon to the nav column that rotates the image 90° clockwise each click. Rotation is tracked independently of zoom/pan, so "Reset view" recenters without un-rotating.
+Opt-in 90° rotation button. Adds a fifth button to the nav column that rotates the image 90° clockwise each click. Rotation is tracked independently of zoom/pan, so "Reset view" recenters without un-rotating.
 
 ```heex
 <Fresco.viewer
@@ -138,6 +140,8 @@ Fresco ships with light + dark palettes for the viewer host background, dot grid
 - `:dark` — force dark palette regardless of OS preference.
 - `:inherit` — emit only the host structure; the parent app's CSS supplies the palette. Use this to follow a parent theme system (see below).
 
+> **Heads up:** `:system` is the default since `0.1.4`. Viewers on dark-OS machines render dark out of the box. Pass `theme={:light}` to lock the old always-light look.
+
 Theming is implemented as CSS custom properties on `.fresco-viewer`:
 
 | Variable | Purpose |
@@ -149,9 +153,9 @@ Theming is implemented as CSS custom properties on `.fresco-viewer`:
 | `--fresco-nav-fg` | Nav button icon color |
 | `--fresco-nav-focus` | Focus-ring color |
 
-### Integrating with a parent theme system (daisyUI, Tailwind, custom palettes)
+### Integrating with a parent theme system
 
-Pass `theme={:inherit}` and define the variables on `.fresco-viewer[data-fresco-theme="inherit"]` in your own CSS. Fresco skips its own var declarations for inherit-mode viewers, so the parent's values land directly. Example for daisyUI:
+Pass `theme={:inherit}` and define the six `--fresco-*` variables on `.fresco-viewer[data-fresco-theme="inherit"]` in your own CSS. Fresco skips its own var declarations for inherit-mode viewers, so the parent's values land directly. The mapping is open-ended — wire each `--fresco-*` to whatever your design system exposes (CSS custom properties, fixed colors, theme tokens, anything that resolves to a CSS color).
 
 ```heex
 <Fresco.viewer
@@ -161,6 +165,8 @@ Pass `theme={:inherit}` and define the variables on `.fresco-viewer[data-fresco-
   theme={:inherit}
 />
 ```
+
+**Example: daisyUI tokens.** Each `--fresco-*` maps to a daisyUI theme token; flipping daisyUI's `data-theme` on `<html>` flips Fresco's palette automatically.
 
 ```css
 .fresco-viewer[data-fresco-theme="inherit"] {
@@ -173,7 +179,20 @@ Pass `theme={:inherit}` and define the variables on `.fresco-viewer[data-fresco-
 }
 ```
 
-With that block in your `app.css`, every inherit-mode Fresco viewer follows whichever daisyUI theme is active on `<html>` — flipping `data-theme` flips the daisyUI vars, which flip Fresco's. The selector matches Fresco's other theme branches at specificity 20, so the override always wins.
+**Example: bare colors.** No design system required — just pin each `--fresco-*` to whatever you want. Useful if you only have one viewer or want a one-off palette.
+
+```css
+.fresco-viewer[data-fresco-theme="inherit"] {
+  --fresco-bg: #1a1a2e;
+  --fresco-grid-dot: rgba(255, 255, 255, 0.08);
+  --fresco-nav-bg: #16213e;
+  --fresco-nav-bg-hover: #0f3460;
+  --fresco-nav-fg: #e94560;
+  --fresco-nav-focus: #f8b400;
+}
+```
+
+The `[data-fresco-theme="inherit"]` selector matches Fresco's other theme branches at specificity 20, so any override at this selector always wins.
 
 ---
 

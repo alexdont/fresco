@@ -4,6 +4,48 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.6 — 2026-05-15
+
+Documentation + test polish patch. No changes to the rendered output
+of `Fresco.viewer/1` — every existing call site behaves exactly as
+in 0.1.5. The goal is to make Fresco's genericity (works for any
+Phoenix app, not just daisyUI consumers) more visible to a new
+reader, and to backfill render-assertion tests for the attributes
+added in 0.1.4 / 0.1.5.
+
+### Changed
+
+- README: clarified that the daisyUI mapping for `theme={:inherit}`
+  is one example among many — any CSS custom properties or fixed
+  colors work. Added a second bare-color example so readers don't
+  infer that daisyUI is required.
+- README: surfaced the `theme={:system}` dark-mode default that
+  landed in 0.1.4 with a "Heads up" callout in the Theming section,
+  so consumers upgrading from 0.1.3 aren't caught off guard by
+  viewers rendering dark on dark-OS machines.
+- README: documented the `FrescoViewer` hook name explicitly so
+  consumers maintaining an explicit hooks map (rather than spreading
+  `window.FrescoHooks`) know what key to register.
+- README: promoted the first-source-only caveat for
+  `handle.imageToScreen` / `screenToImage` to a visible `⚠️ Caveat`
+  callout in the multi-image section, with one extra sentence on
+  what extension authors should do until multi-image disambiguation
+  ships.
+- README + viewer attr doc: rotation section now says "fifth button"
+  (the row of four built-in buttons + a fifth opt-in rotation
+  button) instead of "fifth icon".
+- `priv/static/fresco.js`: documented the rationale for pinning
+  OpenSeadragon to `4.1.0` so future maintainers know the bump
+  contract.
+
+### Tests
+
+- Added render-assertion coverage for `:theme` (all four values),
+  `:sources` (multi-image JSON payload), `:infinite_canvas`
+  (modifier class + data attribute), `:rotate` (data attribute), and
+  the `ArgumentError` guard that fires when neither `:src` nor
+  `:sources` is provided.
+
 ## 0.1.5 — 2026-05-15
 
 One additive feature — a fourth `:theme` value, `:inherit`, that lets
