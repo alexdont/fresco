@@ -4,6 +4,38 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.2.0 — 2026-05-15
+
+Official, documented escape hatch to the underlying OpenSeadragon Viewer
+instance. No breaking changes — `handle.viewer` (the original undocumented
+name) remains supported as a back-compat alias. Bumped to a minor version
+because the new field carries a public stability obligation (Fresco can no
+longer freely rename or reshape the OSD viewer reference), not because the
+code change itself is large — it's a one-line aliasing.
+
+### Added
+
+- `handle.openSeadragon` — official, documented access to the underlying
+  OpenSeadragon Viewer for advanced consumers and layered packages. Use it
+  for OSD APIs Fresco doesn't expose first-class: custom pan/zoom
+  constraints (`panHorizontal`, `minZoomImageRatio`, …), raw OSD event
+  handlers (`canvas-double-click`, `canvas-key`, …), OSD plugin
+  registration, gesture rebinding. See the new "Advanced: OSD escape
+  hatch" section in `README.md` for the stability contract — in
+  particular, the rule that consumers reaching for it routinely should
+  file an issue so common patterns can graduate to first-class Fresco
+  APIs.
+
+### Notes
+
+- `handle.viewer` (the existing back-compat alias for `openSeadragon`)
+  remains supported indefinitely. [Etcher](https://hex.pm/packages/etcher)
+  already depends on this field across five call sites for image-space
+  coordinate math — that's the in-tree consumer whose usage pattern
+  motivated formalizing the contract. New code should prefer
+  `handle.openSeadragon`; Etcher can migrate at its own pace.
+- No breaking changes; no behavior changes for existing consumers.
+
 ## 0.1.6 — 2026-05-15
 
 Documentation + test polish patch. No changes to the rendered output

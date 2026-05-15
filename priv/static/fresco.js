@@ -13,12 +13,20 @@
 //
 // Viewer handle (returned by viewerFor):
 //
-//   { viewer, container,
+//   { openSeadragon, container,
 //     imageToScreen(pt), screenToImage(pt),
 //     getViewportBounds(),
 //     fitBounds(rect, immediately),
 //     setSource(url, opts), swapSourcePreservingBounds(url, opts),
-//     on(eventName, handler) → unsubscribe }
+//     on(eventName, handler) → unsubscribe,
+//     appendNavButton(svg, title, onClick) → unsubscribe (+ .setIcon/.setTitle/.el) }
+//
+// `handle.openSeadragon` is an escape hatch — the underlying OSD Viewer
+// instance. Use it when Fresco doesn't expose the OSD API you need (custom
+// constraints, raw event handlers, plugin registration). See the
+// "Advanced: OSD escape hatch" section in README.md for the contract.
+// `handle.viewer` is a back-compat alias for `openSeadragon` (it was the
+// original name through 0.1.x); new code should prefer `openSeadragon`.
 //
 // Parent app wiring:
 //   import "../../deps/fresco/priv/static/fresco.js"
@@ -380,7 +388,21 @@
     bridge("update-viewport", "update-viewport");
 
     return {
+      // Direct access to the underlying OpenSeadragon Viewer instance. Use
+      // this when you need an OSD API that Fresco doesn't expose first-class
+      // (custom zoom/pan constraints, raw event handlers like
+      // `canvas-double-click`, OSD plugin registration, …). Advanced escape
+      // hatch — file an issue if you find yourself reaching for it routinely;
+      // common patterns should become first-class Fresco APIs. See the
+      // "Advanced: OSD escape hatch" section in README.md for the stability
+      // contract.
+      openSeadragon: viewer,
+
+      // Back-compat alias for `openSeadragon`. `viewer` was the original
+      // (undocumented) name for this field through 0.1.x and Etcher already
+      // depends on it; new code should prefer `openSeadragon`.
       viewer: viewer,
+
       container: container,
 
       imageToScreen: function(pt) {

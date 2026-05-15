@@ -219,6 +219,39 @@ window.Fresco.onViewerReady("photo", function(handle) {
 });
 ```
 
+### Advanced: OSD escape hatch
+
+Fresco's handle exposes the underlying OpenSeadragon Viewer instance at `handle.openSeadragon`. Use this when you need an OSD API that Fresco doesn't surface first-class — pan/zoom constraints, raw event handlers (`canvas-double-click`, `canvas-key`, …), OSD plugin registration, gesture rebinding, etc.
+
+```js
+window.Fresco.onViewerReady("photo", function(handle) {
+  // Disable panning entirely (e.g., for a reader pinned at fit-zoom):
+  handle.openSeadragon.panHorizontal = false;
+  handle.openSeadragon.panVertical = false;
+
+  // Listen to OSD events Fresco doesn't bridge:
+  handle.openSeadragon.addHandler("canvas-double-click", function(e) {
+    // your custom double-click behavior
+  });
+
+  // Override OSD constraints after mount:
+  handle.openSeadragon.viewport.minZoomImageRatio = 1.0;
+});
+```
+
+#### The contract
+
+- `handle.openSeadragon` is a real, current OpenSeadragon Viewer — anything in the [OSD API docs](https://openseadragon.github.io/docs/) works.
+- Reaching for the escape hatch couples your code to **OSD's API and version**, not just Fresco's. If we ever swap the underlying engine, escape-hatch consumers will need to migrate.
+- Fresco pins the OSD CDN version — see `OSD_VERSION` in `priv/static/fresco.js`. The CHANGELOG flags any OSD version bump.
+- **If you find yourself reaching for the escape hatch routinely, file an issue.** Common patterns should become first-class Fresco APIs.
+
+#### `handle.viewer` (back-compat alias)
+
+`handle.viewer` is the original name for this field — it has existed (undocumented) since Fresco's first release, and [Etcher](https://hex.pm/packages/etcher) already depends on it in production. It's retained indefinitely as a back-compat alias for `handle.openSeadragon`. New code should prefer `openSeadragon` — it disambiguates from "the Fresco viewer" (the component / handle itself, the colloquial referent in Fresco's own docs) and signals that you're crossing into OSD territory.
+
+---
+
 ### Source providers
 
 Override Fresco's default "treat the URL as a plain image" behavior for specific URL patterns:
