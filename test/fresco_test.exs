@@ -80,6 +80,16 @@ defmodule FrescoTest do
       assert html =~ ~s(/b.jpg)
     end
 
+    test "pan_optimized defaults to false on the host" do
+      html = render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg")
+      assert html =~ ~s(data-pan-optimized="false")
+    end
+
+    test "pan_optimized=true plumbs through to the host" do
+      html = render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg", pan_optimized: true)
+      assert html =~ ~s(data-pan-optimized="true")
+    end
+
     test "raises ArgumentError when both :src and :sources are missing" do
       assert_raise ArgumentError, ~r/requires either :src/, fn ->
         render_component(&Fresco.viewer/1, id: "v")

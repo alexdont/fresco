@@ -123,6 +123,37 @@ defmodule Fresco.Viewer do
     """
   )
 
+  attr(:pan_optimized, :boolean,
+    default: false,
+    doc: """
+    When `true`, applies a CSS-transform fast path during pure-pan
+    motion so the canvas doesn't repaint per frame. Drops per-frame
+    cost from ~10–20ms to <1ms on iOS Safari — measurably smoother for
+    long-scroll reading (manhwa, comics, document viewers) where the
+    user is scrolling, not zooming.
+
+    How it works: on pan-start, Fresco swaps OSD's drawer for a no-op
+    and starts emitting a synthetic `fast-pan` event in three phases
+    (`start`, `delta`, `end`). Per frame, instead of redrawing the
+    canvas, the hook applies a GPU-composited `transform: translate3d`
+    to OSD's canvas element so the existing pixels glide. On pan-end
+    (or zoom-change / overscan bail), the transform is cleared and
+    OSD's drawer is restored, repainting once at the new position.
+
+    Opt-in (defaults `false`) because the synthetic `fast-pan` event
+    is a new public surface that overlay extensions need to handle in
+    order to stay aligned with the canvas during the transform
+    window. Etcher >= 0.2.8 listens automatically (its SVG overlay
+    transforms in lockstep); older Etcher versions will see
+    annotations visibly drift during pan. Consumers without overlays
+    can opt in unconditionally.
+
+    Bails to the normal redraw path if zoom changes mid-pan or the
+    rotation feature (`:rotate`) is active — both invalidate the
+    simple translate math.
+    """
+  )
+
   attr(:theme, :atom,
     values: [:system, :light, :dark, :inherit],
     default: :system,
@@ -171,6 +202,7 @@ defmodule Fresco.Viewer do
       data-sources={@sources_json}
       data-infinite-canvas={to_string(@infinite_canvas)}
       data-rotate={to_string(@rotate)}
+      data-pan-optimized={to_string(@pan_optimized)}
       data-fresco-theme={to_string(@theme)}
       class={[
         "fresco-viewer",

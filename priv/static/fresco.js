@@ -28,6 +28,15 @@
 // `handle.viewer` is a back-compat alias for `openSeadragon` (it was the
 // original name through 0.1.x); new code should prefer `openSeadragon`.
 //
+// Events fired through `handle.on(eventName, fn)`:
+//   "zoom" / "pan" / "open" / "resize"           — bridged from OSD intent
+//   "animation" / "update-viewport"              — per-frame OSD ticks
+//   "fast-pan"                                   — synthetic; only when
+//     the consumer opted into `:pan_optimized`. Three phases via
+//     `e.phase`: "start" (overlay should add will-change: transform),
+//     "delta" (apply `translate3d(e.x, e.y, 0)` to overlay container),
+//     "end" (clear the transform; OSD's viewport is now committed).
+//
 // Parent app wiring:
 //   import "../../deps/fresco/priv/static/fresco.js"
 //   hooks: { ...window.FrescoHooks, ...colocatedHooks }
@@ -360,6 +369,156 @@
   // The viewer handle exposed via Fresco.viewerFor
   // ===========================================================================
 
+  // ===========================================================================
+  // Fast-pan CSS-transform module
+  //
+  // When the consumer opts into `:pan_optimized`, this module replaces OSD's
+  // per-frame canvas redraw with a CSS-transform glide for the duration of
+  // each pan gesture. The technique mirrors native browser scroll:
+  //
+  //   - On pan-start: snapshot zoom + canvas state, swap OSD's drawer for a
+  //     no-op so per-tick redraws are skipped. Emit `fast-pan {phase:"start"}`.
+  //   - Per pan tick: read OSD's current viewport, compute the screen-pixel
+  //     delta from start, apply `transform: translate3d(dx, dy, 0)` to the
+  //     canvas. Emit `fast-pan {phase:"delta", x: dx, y: dy}` so overlays
+  //     (Etcher) can transform in lockstep.
+  //   - On animation-finish (or zoom-change / overscan bail): restore OSD's
+  //     drawer, clear the canvas transform, trigger one repaint so OSD
+  //     paints at its committed viewport position. Emit `fast-pan {phase:"end"}`.
+  //
+  // Bails out (immediately committing and falling back to OSD's normal redraw
+  // path) when:
+  //   - Zoom changes mid-pan (transform math no longer holds)
+  //   - The :rotate feature is active (rotation invalidates simple translate)
+  //   - Cumulative delta crosses the overscan threshold (50% of viewport
+  //     height) — beyond that, the painted canvas wouldn't cover the visible
+  //     area, so we accept a redraw and reset.
+  // ===========================================================================
+
+  function installFastPan(viewer, handle, rotateActive) {
+    if (rotateActive) return; // rotation invalidates the translate math
+    if (!viewer || !viewer.drawer) return;
+
+    var state = null; // null when inactive; object when fast-pan in flight
+
+    function canvas() {
+      // OSD may swap drawer implementations between releases; treat the
+      // canvas element as the only stable contract.
+      return viewer.drawer && (viewer.drawer.canvas || (viewer.drawer.getCanvas && viewer.drawer.getCanvas()));
+    }
+
+    function viewportHeightPx() {
+      var c = canvas();
+      return c ? c.clientHeight || c.height : 0;
+    }
+
+    function startFastPan() {
+      var c = canvas();
+      if (!c) return;
+      var origDraw = viewer.drawer.draw;
+      if (typeof origDraw !== "function") return;
+
+      state = {
+        canvas: c,
+        origDraw: origDraw,
+        startCenter: viewer.viewport.getCenter(true).clone(),
+        startZoom: viewer.viewport.getZoom(true),
+        dx: 0,
+        dy: 0
+      };
+
+      // Suppress per-frame redraw for the duration of the gesture.
+      viewer.drawer.draw = function noopDraw() {};
+
+      c.style.willChange = "transform";
+      handle._emit("fast-pan", { phase: "start", x: 0, y: 0 });
+    }
+
+    function tickFastPan() {
+      if (!state) return;
+      // Bail to commit if zoom drifted mid-pan.
+      if (viewer.viewport.getZoom(true) !== state.startZoom) {
+        commitFastPan();
+        return;
+      }
+      // Compute where the original center point sits on screen now that
+      // OSD has moved the viewport. That delta IS the screen-pixel
+      // distance we need to translate the canvas by so the existing
+      // pixels visually follow OSD's intent without a redraw.
+      var startPxNow = viewer.viewport.pixelFromPoint(state.startCenter, true);
+      var startPxThen = new window.OpenSeadragon.Point(
+        state.canvas.clientWidth / 2,
+        state.canvas.clientHeight / 2
+      );
+      var dx = startPxNow.x - startPxThen.x;
+      var dy = startPxNow.y - startPxThen.y;
+
+      // Overscan bail: beyond half a viewport, the painted tiles can't
+      // cover the visible area cleanly. Commit and let OSD repaint.
+      var vh = viewportHeightPx();
+      if (vh > 0 && Math.abs(dy) > vh * 0.5) {
+        commitFastPan();
+        return;
+      }
+
+      // dx/dy is where the original viewport center (image point at
+      // pan-start) sits on screen NOW, relative to canvas center. When
+      // the user drags down, OSD pans the viewport up, the original
+      // center appears further down on screen → dy positive. We move
+      // the canvas in the same direction so the existing pixels glide
+      // with the user's gesture; an overlay that wants to stay anchored
+      // to the same image-space coordinates applies the same transform.
+      state.dx = dx;
+      state.dy = dy;
+      state.canvas.style.transform =
+        "translate3d(" + dx + "px, " + dy + "px, 0)";
+      handle._emit("fast-pan", { phase: "delta", x: dx, y: dy });
+    }
+
+    function commitFastPan() {
+      if (!state) return;
+      var c = state.canvas;
+      var origDraw = state.origDraw;
+
+      // Restore OSD's drawer first so the repaint below paints normally.
+      viewer.drawer.draw = origDraw;
+
+      // Clear the CSS transform — OSD's viewport already reflects the
+      // pan (OSD's own pan handler updated it on every tick); the next
+      // draw will paint at the correct position.
+      c.style.transform = "";
+      c.style.willChange = "";
+
+      // Trigger one immediate redraw at the committed position.
+      try { origDraw.call(viewer.drawer); } catch (_) {}
+
+      state = null;
+      handle._emit("fast-pan", { phase: "end" });
+    }
+
+    // OSD fires `pan` on user gesture or programmatic pan, `animation`
+    // per spring tick, `animation-finish` when the spring settles. We
+    // start on the first `pan`, follow each `animation` tick, and
+    // commit on `animation-finish`.
+    viewer.addHandler("pan", function() {
+      if (!state) startFastPan();
+    });
+
+    viewer.addHandler("animation", function() {
+      if (state) tickFastPan();
+    });
+
+    viewer.addHandler("animation-finish", function() {
+      if (state) commitFastPan();
+    });
+
+    // Bail aggressively on any zoom intent so the fast path doesn't
+    // smear into zoom frames.
+    viewer.addHandler("zoom", function() {
+      if (state) commitFastPan();
+    });
+  }
+
   function makeHandle(viewer, container, navEl) {
     var subscribers = {};   // eventName → [handler, …]
 
@@ -441,6 +600,19 @@
           var idx = arr.indexOf(handler);
           if (idx !== -1) arr.splice(idx, 1);
         };
+      },
+
+      // Internal: synchronous broadcast to subscribers. Used by the
+      // fast-pan module (installed by the hook when `:pan_optimized` is
+      // set) to emit `fast-pan` events without going through OSD's
+      // addHandler bridge. Underscore-prefixed because consumers should
+      // never call this — they listen via `on(eventName, fn)` and the
+      // emit side is owned by Fresco's own modules.
+      _emit: function(eventName, payload) {
+        var arr = subscribers[eventName] || [];
+        for (var i = 0; i < arr.length; i++) {
+          try { arr[i](payload); } catch (_) {}
+        }
       },
 
       // Append a button to Fresco's nav column (below the existing four:
@@ -559,6 +731,16 @@
         // `handle.appendNavButton(...)`.
         self.handle = makeHandle(self.viewer, self.el, self.nav);
         publishReady(self.el.id, self.handle);
+
+        // Opt-in CSS-transform fast path for pure-pan motion. Installs
+        // a pan interceptor that swaps OSD's drawer for a no-op during
+        // the gesture, applies `transform: translate3d` to the canvas
+        // per frame, and emits a `fast-pan` event so overlays (Etcher)
+        // can transform in lockstep. See README "Optimized pan for
+        // long-scroll content" for the full contract.
+        if (self.el.dataset.panOptimized === "true") {
+          installFastPan(self.viewer, self.handle, !!rotateEnabled);
+        }
       });
     },
 

@@ -105,6 +105,56 @@ Pass `:sources` (a list of maps) instead of `:src` to lay multiple images out on
 
 ---
 
+## Optimized pan for long-scroll content
+
+Opt-in mode tuned for the long-scroll reading use case (manhwa, manga, comics, document viewers) where the user is panning continuously, not zooming. By default, OpenSeadragon repaints the canvas via `ctx.drawImage(tile)` every pan frame — fine for desktop, painfully slow on iOS Safari even on recent hardware. `pan_optimized` swaps the per-frame redraw for a GPU-composited `transform: translate3d` glide while pan is in flight, dropping per-frame cost from ~10–20ms to <1ms.
+
+```heex
+<Fresco.viewer
+  id="reader"
+  src={~p"/uploads/chapter.jpg"}
+  class="w-full h-screen"
+  pan_optimized
+/>
+```
+
+What changes when `pan_optimized` is on:
+
+- On pan-start, OSD's drawer is temporarily swapped for a no-op; the canvas stops repainting per frame.
+- Each pan tick applies `transform: translate3d(dx, dy, 0)` to the canvas element so the existing pixels visually glide with the user's gesture.
+- On pan-end (or zoom-change / overscan bail), the transform is cleared, OSD's drawer is restored, and the canvas repaints once at the committed position.
+- The fast path bails immediately if the user starts zooming, if rotation is active (`:rotate` invalidates the simple translate math), or if cumulative delta crosses ~50% of viewport height (overscan).
+
+### Coordinating overlays — the `fast-pan` event
+
+The fast path emits a synthetic `fast-pan` event on the handle so overlay extensions (annotations, ML highlights, custom HUDs) can transform in lockstep with the canvas. Three phases via `e.phase`:
+
+```js
+window.Fresco.onViewerReady("reader", function (handle) {
+  var overlay = document.getElementById("my-overlay");
+  handle.on("fast-pan", function (e) {
+    if (e.phase === "start") {
+      overlay.style.willChange = "transform";
+    }
+    if (e.phase === "start" || e.phase === "delta") {
+      overlay.style.transform = "translate3d(" + e.x + "px, " + e.y + "px, 0)";
+    }
+    if (e.phase === "end") {
+      overlay.style.transform = "";
+      overlay.style.willChange = "";
+      // OSD's viewport is now committed; your overlay can read fresh
+      // coordinates from `handle.imageToScreen(...)` again.
+    }
+  });
+});
+```
+
+[Etcher](https://hex.pm/packages/etcher) `>= 0.2.8` listens automatically — its SVG annotation layer transforms in lockstep with no consumer setup required. Older Etcher versions paired with Fresco `pan_optimized` will see annotations visibly drift during the pan window. Consumers without overlays can opt in unconditionally.
+
+> **Default is off.** Existing viewers see no behavior change unless they explicitly pass `pan_optimized`.
+
+---
+
 ## Rotation
 
 Opt-in 90° rotation button. Adds a fifth button to the nav column that rotates the image 90° clockwise each click. Rotation is tracked independently of zoom/pan, so "Reset view" recenters without un-rotating.

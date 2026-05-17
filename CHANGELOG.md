@@ -4,6 +4,53 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.0 — 2026-05-17
+
+CSS-transform pan fast path tuned for long-scroll reading content
+(manhwa / manga / comics / document viewers) where the user is
+panning continuously, not zooming. Opt-in via a new `:pan_optimized`
+attr on `Fresco.viewer/1`. Default off — existing viewers see no
+behavior change. Bumped to minor because the release introduces a
+new public attr and a new synthetic event (`fast-pan`) that overlay
+extensions need to coordinate with.
+
+### Added
+
+- New `:pan_optimized` attribute on `Fresco.viewer` (defaults
+  `false`). When `true`, the JS hook installs a pan interceptor
+  that temporarily swaps OSD's drawer for a no-op during the
+  gesture, applies a GPU-composited `transform: translate3d` to
+  OSD's canvas element per frame, and emits a `fast-pan` event in
+  three phases (`start`, `delta`, `end`). Drops per-frame cost
+  from ~10–20ms to <1ms on iOS Safari for pure-pan motion. Bails
+  to OSD's normal redraw path on zoom-change, overscan (cumulative
+  delta > 50% of viewport height), and when `:rotate` is also
+  active (rotation invalidates the simple translate math).
+- New `fast-pan` event in the `handle.on(eventName, fn)` channel.
+  Only emitted when `:pan_optimized` is set on the viewer. Payload:
+  `{ phase: "start" | "delta" | "end", x, y }` with cumulative
+  screen-pixel offset. Overlay extensions apply the same
+  `translate3d(x, y, 0)` to their container so they stay aligned
+  with the canvas during the fast-path window. [Etcher](https://hex.pm/packages/etcher)
+  `>= 0.2.8` listens automatically.
+- New `handle._emit(eventName, payload)` internal method on the
+  viewer handle for Fresco's own modules to fire synthetic events
+  through the existing subscriber list. Underscore-prefixed
+  because consumers should never call it — emit is owned by
+  Fresco's internals; consumers listen via `handle.on(...)`.
+
+### Notes
+
+- No breaking changes. The fast-pan event is emitted only when the
+  consumer opts into `:pan_optimized`; older Etcher (or any other
+  overlay) paired with non-opted viewers sees nothing different.
+- Older Etcher (`< 0.2.8`) paired with a `:pan_optimized` viewer
+  will see annotations visibly drift during the pan window. Either
+  upgrade Etcher or hold off on opting in to `:pan_optimized` until
+  Etcher is on `>= 0.2.8`.
+- Tessera (the DZI deep-zoom layer) is unaffected — it's a source
+  provider, no overlay.
+
 ## 0.2.0 — 2026-05-15
 
 Official, documented escape hatch to the underlying OpenSeadragon Viewer
