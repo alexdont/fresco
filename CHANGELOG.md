@@ -4,6 +4,45 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.2 — 2026-05-17
+
+Fix `:pan_optimized` getting stuck for any caller that pans with
+`immediately=true` (touch drag, wheel scroll, custom per-rAF
+`panBy(delta, true)` loops). Those callers fire `pan` events but
+never `animation` / `animation-finish` — the 0.3.1 fast-pan
+installer engaged anyway and waited on a commit signal that
+never arrived, leaving OSD's drawer suppressed indefinitely. The
+user would see stale tiles until the next spring-based pan
+flushed the state.
+
+### Fixed
+
+- `installFastPan` now skips `pan` events with `e.immediately ===
+  true`. Immediate panners are already snappy (no spring redraw
+  cycle to skip) — the fast path's win is specifically for spring
+  momentum / programmatic `panTo(target, false)`, which is the
+  slow case on iOS. Native OSD handles the immediate case
+  directly.
+- Added a 1-second watchdog timer as defensive backup. Armed when
+  fast-pan starts, re-armed on every spring tick, cleared on
+  commit. If no animation events arrive within the window
+  (e.g., a custom OSD plugin or a future OSD release pans through
+  an unfamiliar code path), the watchdog fires `commitFastPan`
+  with a `console.warn` so the drawer can't stay suppressed
+  forever. Belt-and-suspenders to the `immediately`-skip above.
+
+### Notes
+
+- No public API changes. `:pan_optimized` attr and `fast-pan`
+  event surface identical to 0.3.0/0.3.1. Etcher 0.2.8's listener
+  continues to work unchanged.
+- Consumers driving their own per-rAF inertia loops (calling
+  `panBy(delta, true)` each frame) will now correctly skip
+  fast-pan — `pan_optimized={true}` is effectively a no-op for
+  that motion shape, by design. Switch your snap to
+  `panTo(target, false)` (spring-driven) to actually engage the
+  fast path.
+
 ## 0.3.1 — 2026-05-17
 
 Fix `:pan_optimized` not actually engaging in OSD 4.1.x. The 0.3.0

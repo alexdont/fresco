@@ -450,7 +450,8 @@
         startCenter: viewer.viewport.getCenter(true).clone(),
         startZoom: viewer.viewport.getZoom(true),
         dx: 0,
-        dy: 0
+        dy: 0,
+        watchdog: null
       };
 
       // Suppress per-frame redraw for the duration of the gesture. Override
@@ -461,6 +462,26 @@
 
       c.style.willChange = "transform";
       handle._emit("fast-pan", { phase: "start", x: 0, y: 0 });
+      armWatchdog();
+    }
+
+    // Defensive backup: if no animation events arrive within the
+    // watchdog window, commit anyway. The `immediately`-bail above
+    // covers the known OSD callers that don't fire animation events,
+    // but a custom OSD plugin or a future OSD release could pan
+    // through some other code path; without this, fast-pan could
+    // suppress the drawer indefinitely and the user would see stale
+    // tiles. 1s is plenty for any reasonable spring animation; if a
+    // legitimate spring tick comes in, we re-arm.
+    function armWatchdog() {
+      if (!state) return;
+      if (state.watchdog) clearTimeout(state.watchdog);
+      state.watchdog = setTimeout(function() {
+        if (state) {
+          warn("watchdog fired — committing without animation-finish (no spring ticks within 1s)");
+          commitFastPan();
+        }
+      }, 1000);
     }
 
     function tickFastPan() {
@@ -502,10 +523,12 @@
       state.canvas.style.transform =
         "translate3d(" + dx + "px, " + dy + "px, 0)";
       handle._emit("fast-pan", { phase: "delta", x: dx, y: dy });
+      armWatchdog();
     }
 
     function commitFastPan() {
       if (!state) return;
+      if (state.watchdog) { clearTimeout(state.watchdog); state.watchdog = null; }
       var c = state.canvas;
       var drawer = viewer.drawer;
 
@@ -530,9 +553,19 @@
 
     // OSD fires `pan` on user gesture or programmatic pan, `animation`
     // per spring tick, `animation-finish` when the spring settles. We
-    // start on the first `pan`, follow each `animation` tick, and
-    // commit on `animation-finish`.
-    viewer.addHandler("pan", function() {
+    // start on the first spring `pan`, follow each `animation` tick,
+    // and commit on `animation-finish`.
+    //
+    // We deliberately skip pan events with `immediately === true`
+    // (touch drag, wheel scroll, custom per-rAF `panBy(delta, true)`
+    // loops): immediate panners don't fire `animation` or
+    // `animation-finish`, so if we engaged fast-pan for them the
+    // drawer would stay suppressed forever and the user would never
+    // see new tiles paint. Native OSD redraw is already snappy
+    // enough for those callers (it's the spring momentum that
+    // benefits from the fast path — that's the slow case on iOS).
+    viewer.addHandler("pan", function(e) {
+      if (e && e.immediately) return;
       if (!state) startFastPan();
     });
 
