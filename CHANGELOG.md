@@ -4,6 +4,48 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.1 — 2026-05-17
+
+Fix `:pan_optimized` not actually engaging in OSD 4.1.x. The 0.3.0
+fast-pan installer probed for `viewer.drawer.draw`, but OSD's
+modern canvas drawer (4.1 onwards) exposes `.update()` instead —
+no `.draw()` method exists on the drawer object. The check
+silently returned, so the fast path never engaged for anyone on
+the default OSD version Fresco pins to. Consumers saw no perf
+change between `pan_optimized={true}` and the default; the new
+event was never emitted.
+
+This patch is a true no-op for behavior unless you're on
+`:pan_optimized` — in which case it switches you from "silently
+inert" to "actually engaged."
+
+### Fixed
+
+- `installFastPan` now probes for both `drawer.update` and
+  `drawer.draw` and suppresses whichever exists. OSD 4.1.x uses
+  `update`; older or custom drawers may still use `draw`. Being
+  defensive about both shapes means future drawer revisions
+  don't silently break the fast path again.
+- `commitFastPan` now triggers the post-pan repaint via
+  `viewer.forceRedraw()` (a stable OSD public API) instead of
+  calling the (potentially-renamed) drawer method directly.
+- Added `console.warn` on every silent-bail path inside
+  `installFastPan` / `startFastPan`. Previously, if the install
+  early-returned (no drawer, rotate active, unknown drawer
+  methods, missing canvas), the consumer had no signal — the
+  fast-pan event just never fired. Now developers see exactly
+  why the fast path didn't engage.
+
+### Notes
+
+- No public API changes. `:pan_optimized` attr and `fast-pan`
+  event surface are identical to 0.3.0. Etcher 0.2.8's
+  subscription continues to work unchanged.
+- After upgrading, `pan_optimized={true}` viewers will now
+  actually fire `fast-pan` events. Overlay extensions (Etcher
+  ≥ 0.2.8) will start receiving them and applying the matching
+  CSS transform.
+
 ## 0.3.0 — 2026-05-17
 
 CSS-transform pan fast path tuned for long-scroll reading content

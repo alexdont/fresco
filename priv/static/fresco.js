@@ -396,10 +396,22 @@
   // ===========================================================================
 
   function installFastPan(viewer, handle, rotateActive) {
-    if (rotateActive) return; // rotation invalidates the translate math
-    if (!viewer || !viewer.drawer) return;
+    if (rotateActive) {
+      warn("pan_optimized + :rotate are mutually exclusive — fast-pan disabled");
+      return;
+    }
+    if (!viewer || !viewer.drawer) {
+      warn("viewer.drawer not present at install time — fast-pan disabled");
+      return;
+    }
 
     var state = null; // null when inactive; object when fast-pan in flight
+
+    function warn(msg) {
+      if (typeof console !== "undefined" && console.warn) {
+        console.warn("[Fresco] pan_optimized: " + msg);
+      }
+    }
 
     function canvas() {
       // OSD may swap drawer implementations between releases; treat the
@@ -414,12 +426,26 @@
 
     function startFastPan() {
       var c = canvas();
-      if (!c) return;
-      var origDraw = viewer.drawer.draw;
-      if (typeof origDraw !== "function") return;
+      if (!c) {
+        warn("drawer has no canvas element — fast-pan disabled");
+        return;
+      }
+      var drawer = viewer.drawer;
+      var origUpdate = drawer.update;
+      var origDraw = drawer.draw;
+
+      // OSD 4.1's canvas drawer exposes `.update()`; older drawer APIs
+      // (and some custom drawers) used `.draw()`. We need at least one
+      // to suppress per-frame redraw. If neither exists, the consumer
+      // is on an unfamiliar drawer and we can't safely no-op anything.
+      if (typeof origUpdate !== "function" && typeof origDraw !== "function") {
+        warn("drawer has neither .update nor .draw — fast-pan disabled (unknown OSD drawer)");
+        return;
+      }
 
       state = {
         canvas: c,
+        origUpdate: origUpdate,
         origDraw: origDraw,
         startCenter: viewer.viewport.getCenter(true).clone(),
         startZoom: viewer.viewport.getZoom(true),
@@ -427,8 +453,11 @@
         dy: 0
       };
 
-      // Suppress per-frame redraw for the duration of the gesture.
-      viewer.drawer.draw = function noopDraw() {};
+      // Suppress per-frame redraw for the duration of the gesture. Override
+      // whichever methods exist — being defensive about both shapes means
+      // future OSD drawer revisions don't silently break the fast path.
+      if (typeof origUpdate === "function") drawer.update = function() {};
+      if (typeof origDraw === "function") drawer.draw = function() {};
 
       c.style.willChange = "transform";
       handle._emit("fast-pan", { phase: "start", x: 0, y: 0 });
@@ -478,10 +507,11 @@
     function commitFastPan() {
       if (!state) return;
       var c = state.canvas;
-      var origDraw = state.origDraw;
+      var drawer = viewer.drawer;
 
-      // Restore OSD's drawer first so the repaint below paints normally.
-      viewer.drawer.draw = origDraw;
+      // Restore whichever drawer methods we overrode in startFastPan.
+      if (typeof state.origUpdate === "function") drawer.update = state.origUpdate;
+      if (typeof state.origDraw === "function") drawer.draw = state.origDraw;
 
       // Clear the CSS transform — OSD's viewport already reflects the
       // pan (OSD's own pan handler updated it on every tick); the next
@@ -489,8 +519,10 @@
       c.style.transform = "";
       c.style.willChange = "";
 
-      // Trigger one immediate redraw at the committed position.
-      try { origDraw.call(viewer.drawer); } catch (_) {}
+      // Force one immediate redraw at the committed position via OSD's
+      // public API. Works regardless of which drawer method names exist —
+      // safer than calling drawer internals (`update` / `draw`) directly.
+      try { viewer.forceRedraw(); } catch (_) {}
 
       state = null;
       handle._emit("fast-pan", { phase: "end" });
