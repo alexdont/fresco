@@ -135,11 +135,27 @@
       return viewerRegistry[domId] || null;
     },
 
+    // Identical lookup keyed by dom id; named separately so consumer code
+    // self-documents which host shape it expects. `viewerFor` returns a
+    // viewer-shaped handle, `scrollStripFor` returns a strip-shaped handle.
+    // Same underlying registry — `onViewerReady` (and its `onReady` alias)
+    // works for either.
+    scrollStripFor: function(domId) {
+      return viewerRegistry[domId] || null;
+    },
+
     onViewerReady: function(domId, callback) {
       var handle = viewerRegistry[domId];
       if (handle) { callback(handle); return; }
       readyCallbacks[domId] = readyCallbacks[domId] || [];
       readyCallbacks[domId].push(callback);
+    },
+
+    // Alias for onViewerReady. The strip handle isn't a "viewer"
+    // colloquially — callers reading scrollStrip code will find onReady
+    // more natural. Both names share the same registry/queue.
+    onReady: function(domId, callback) {
+      return window.Fresco.onViewerReady(domId, callback);
     },
 
     // Register a source provider. Predicate is called with the source URL
@@ -274,6 +290,67 @@
       ".fresco-viewer[data-fresco-theme=\"light\"] {",
       "  --fresco-bg: #fafafa;",
       "  --fresco-grid-dot: #d4d4d8;",
+      "  --fresco-nav-bg: rgba(0, 0, 0, 0.55);",
+      "  --fresco-nav-bg-hover: rgba(0, 0, 0, 0.78);",
+      "  --fresco-nav-fg: #fff;",
+      "  --fresco-nav-focus: rgba(255, 255, 255, 0.7);",
+      "}",
+
+      // ── Fresco.scrollStrip ─────────────────────────────────────────
+      // Strip mode: a scroll container holding one <img> per source.
+      // No dot grid (strip is a reading surface, not a canvas), no nav
+      // overlay by default. Reuses the same --fresco-* custom property
+      // surface so theme={:inherit} works the same way as for the
+      // viewer.
+      ".fresco-strip:not([data-fresco-theme=\"inherit\"]) {",
+      "  --fresco-bg: #fafafa;",
+      "  --fresco-nav-bg: rgba(0, 0, 0, 0.55);",
+      "  --fresco-nav-bg-hover: rgba(0, 0, 0, 0.78);",
+      "  --fresco-nav-fg: #fff;",
+      "  --fresco-nav-focus: rgba(255, 255, 255, 0.7);",
+      "}",
+      ".fresco-strip {",
+      "  background-color: var(--fresco-bg);",
+      "  -webkit-overflow-scrolling: touch;",
+      "  scrollbar-width: thin;",
+      "}",
+      // Snap modes (opt-in via :snap_to_image). Strip mode itself uses
+      // native scroll; these rules add browser-native scroll-snap on
+      // the y-axis when the consumer opts in. Useful for IG-style
+      // feeds and slide decks; usually wrong for tall continuous
+      // content (manhwa pages), which is why the default is :off.
+      ".fresco-strip.fresco-strip--snap-mandatory {",
+      "  scroll-snap-type: y mandatory;",
+      "}",
+      ".fresco-strip.fresco-strip--snap-mandatory > img {",
+      "  scroll-snap-align: start;",
+      "}",
+      ".fresco-strip.fresco-strip--snap-proximity {",
+      "  scroll-snap-type: y proximity;",
+      "}",
+      ".fresco-strip.fresco-strip--snap-proximity > img {",
+      "  scroll-snap-align: start;",
+      "}",
+      // Dark mode for the strip: follow OS preference unless explicitly
+      // opted out via :light or :inherit. Mirrors the viewer's branch.
+      "@media (prefers-color-scheme: dark) {",
+      "  .fresco-strip:not([data-fresco-theme=\"light\"]):not([data-fresco-theme=\"inherit\"]) {",
+      "    --fresco-bg: #0a0a0a;",
+      "    --fresco-nav-bg: rgba(255, 255, 255, 0.12);",
+      "    --fresco-nav-bg-hover: rgba(255, 255, 255, 0.20);",
+      "    --fresco-nav-fg: #fff;",
+      "    --fresco-nav-focus: rgba(255, 255, 255, 0.7);",
+      "  }",
+      "}",
+      ".fresco-strip[data-fresco-theme=\"dark\"] {",
+      "  --fresco-bg: #0a0a0a;",
+      "  --fresco-nav-bg: rgba(255, 255, 255, 0.12);",
+      "  --fresco-nav-bg-hover: rgba(255, 255, 255, 0.20);",
+      "  --fresco-nav-fg: #fff;",
+      "  --fresco-nav-focus: rgba(255, 255, 255, 0.7);",
+      "}",
+      ".fresco-strip[data-fresco-theme=\"light\"] {",
+      "  --fresco-bg: #fafafa;",
       "  --fresco-nav-bg: rgba(0, 0, 0, 0.55);",
       "  --fresco-nav-bg-hover: rgba(0, 0, 0, 0.78);",
       "  --fresco-nav-fg: #fff;",
@@ -584,16 +661,73 @@
     });
   }
 
-  function makeHandle(viewer, container, navEl) {
-    var subscribers = {};   // eventName → [handler, …]
+  // ===========================================================================
+  // Shared event-bus helper. Both the OSD viewer handle (`makeHandle`) and the
+  // strip handle (`makeStripHandle`) expose the same `on(name, fn) →
+  // unsubscribe` channel and the same internal `_emit(name, payload)`. Pulling
+  // this out keeps both factories in sync and removes a copy-paste opportunity.
+  // ===========================================================================
 
-    // Bridge OSD events to our subscriber list.
+  function createEventBus() {
+    var subscribers = {};
+
+    return {
+      on: function(eventName, handler) {
+        subscribers[eventName] = subscribers[eventName] || [];
+        subscribers[eventName].push(handler);
+        return function unsubscribe() {
+          var arr = subscribers[eventName] || [];
+          var idx = arr.indexOf(handler);
+          if (idx !== -1) arr.splice(idx, 1);
+        };
+      },
+
+      // Internal: synchronous broadcast to subscribers. Underscore-prefixed
+      // because consumers should never call this — they listen via `on(name,
+      // fn)` and the emit side is owned by Fresco's own modules (OSD-event
+      // bridges in `makeHandle`, the scroll bridge in the strip hook, the
+      // fast-pan module installed when `:pan_optimized` is set, etc.).
+      _emit: function(eventName, payload) {
+        var arr = subscribers[eventName] || [];
+        for (var i = 0; i < arr.length; i++) {
+          try { arr[i](payload); } catch (_) {}
+        }
+      }
+    };
+  }
+
+  // ===========================================================================
+  // Shared nav-button attach helper. Returns an unsubscribe function carrying
+  // `.setIcon(svg) / .setTitle(text) / .el` so callers can mutate after
+  // creation without re-adding (which would reshuffle position). When `navEl`
+  // is null (e.g., strip mode without a built-in nav), returns a no-op so
+  // callers can call `appendNavButton` unconditionally and get an inert
+  // unsubscribe back.
+  // ===========================================================================
+
+  function attachNavButton(navEl, svg, title, onClick) {
+    if (!navEl) return function noop() {};
+    var btn = makeButton(svg, title, onClick);
+    navEl.appendChild(btn);
+    var remove = function removeButton() {
+      if (btn.parentNode === navEl) navEl.removeChild(btn);
+    };
+    remove.setIcon = function(nextSvg) { btn.innerHTML = nextSvg; };
+    remove.setTitle = function(nextTitle) {
+      btn.title = nextTitle;
+      btn.setAttribute("aria-label", nextTitle);
+    };
+    remove.el = btn;
+    return remove;
+  }
+
+  function makeHandle(viewer, container, navEl) {
+    var bus = createEventBus();
+
+    // Bridge OSD events into our subscriber list.
     function bridge(osdEvent, ourEvent) {
       viewer.addHandler(osdEvent, function(e) {
-        var arr = subscribers[ourEvent] || [];
-        for (var i = 0; i < arr.length; i++) {
-          try { arr[i](e); } catch (_) {}
-        }
+        bus._emit(ourEvent, e);
       });
     }
 
@@ -657,55 +791,186 @@
         swapSourcePreservingBounds(viewer, url);
       },
 
-      on: function(eventName, handler) {
-        subscribers[eventName] = subscribers[eventName] || [];
-        subscribers[eventName].push(handler);
-        return function unsubscribe() {
-          var arr = subscribers[eventName] || [];
-          var idx = arr.indexOf(handler);
-          if (idx !== -1) arr.splice(idx, 1);
-        };
-      },
+      on: bus.on,
 
-      // Internal: synchronous broadcast to subscribers. Used by the
+      // Internal: synchronous broadcast to subscribers. Bridges to OSD
+      // events use this directly via the local `bridge` helper; the
       // fast-pan module (installed by the hook when `:pan_optimized` is
-      // set) to emit `fast-pan` events without going through OSD's
-      // addHandler bridge. Underscore-prefixed because consumers should
-      // never call this — they listen via `on(eventName, fn)` and the
-      // emit side is owned by Fresco's own modules.
-      _emit: function(eventName, payload) {
-        var arr = subscribers[eventName] || [];
-        for (var i = 0; i < arr.length; i++) {
-          try { arr[i](payload); } catch (_) {}
-        }
-      },
+      // set) uses it to emit `fast-pan` events outside the OSD-handler
+      // chain. Consumers should never call this — they listen via
+      // `on(name, fn)` and the emit side is owned by Fresco's internals.
+      _emit: bus._emit,
 
       // Append a button to Fresco's nav column (below the existing four:
       // zoom-in, zoom-out, reset, fullscreen). Used by extensions like
       // Etcher to add tool toggles. Returns an unsubscribe function that
       // removes the button on cleanup. The returned function carries a
       // few helpers as properties for callers that want to mutate the
-      // button after creation:
-      //
-      //   .setIcon(svgString) — replace the inner SVG.
-      //   .setTitle(text)     — update the tooltip + aria-label.
-      //   .el                 — the underlying <button> element.
+      // button after creation (.setIcon, .setTitle, .el). See
+      // attachNavButton for the shared implementation.
       appendNavButton: function(svg, title, onClick) {
-        if (!navEl) return function noop() {};
-        var btn = makeButton(svg, title, onClick);
-        navEl.appendChild(btn);
-        var remove = function removeButton() {
-          if (btn.parentNode === navEl) navEl.removeChild(btn);
-        };
-        remove.setIcon = function(nextSvg) { btn.innerHTML = nextSvg; };
-        remove.setTitle = function(nextTitle) {
-          btn.title = nextTitle;
-          btn.setAttribute("aria-label", nextTitle);
-        };
-        remove.el = btn;
-        return remove;
+        return attachNavButton(navEl, svg, title, onClick);
       }
     };
+  }
+
+  // ===========================================================================
+  // Strip handle — exposed by Fresco.scrollStripFor(domId) / onViewerReady.
+  //
+  // Surface mirrors `makeHandle` where it makes sense (`container`, `on`,
+  // `_emit`, `appendNavButton`) and replaces the rest with strip-native
+  // methods:
+  //
+  //   handle.scrollTo({imageIdx, y, behavior})  — replaces panTo
+  //   handle.scrollBy({dy, behavior})           — replaces panBy
+  //   handle.imageToScreen({imageIdx, x, y})    — coords are per-image
+  //   handle.screenToImage({x, y}) → {imageIdx, x, y}
+  //   handle.getScrollState()                   — strip equivalent of bounds
+  //
+  // `handle.openSeadragon` is intentionally a throwing getter — strip mode
+  // has no OSD, and accessing it usually means an overlay was written for the
+  // viewer host without an adapter. The error message points at the fix.
+  //
+  // The strip handle gets its event emissions from the scroll bridge inside
+  // the FrescoScrollStrip hook (not from this factory) — by the time the
+  // hook calls `publishReady(...)`, the events the bridge will fire later
+  // already have a subscriber list via `bus.on`.
+  // ===========================================================================
+
+  function makeStripHandle(container, sources, opts) {
+    opts = opts || {};
+    var navEl = opts.navEl || null;
+
+    var bus = createEventBus();
+
+    // Find the <img> for a given image index (set up by the hook).
+    function imgAt(idx) {
+      if (!container) return null;
+      return container.querySelector(
+        '[data-fresco-strip-img][data-image-idx="' + idx + '"]'
+      );
+    }
+
+    // Compute the scroll offset (within the container) that puts image `idx`
+    // flush to the top, plus an optional `y` pixel offset within the image.
+    function scrollTopFor(idx, y) {
+      var img = imgAt(idx);
+      if (!img) return null;
+      var rect = img.getBoundingClientRect();
+      var cRect = container.getBoundingClientRect();
+      return container.scrollTop + (rect.top - cRect.top) + (y || 0);
+    }
+
+    function scrollTo(payload) {
+      payload = payload || {};
+      var behavior = payload.behavior === "smooth" ? "smooth" : "instant";
+      var idx = typeof payload.imageIdx === "number" ? payload.imageIdx : 0;
+      var y = typeof payload.y === "number" ? payload.y : 0;
+      var top = scrollTopFor(idx, y);
+      if (top == null) return;
+      try {
+        container.scrollTo({ top: top, behavior: behavior });
+      } catch (_) {
+        // Safari < 14 / older browsers don't accept the options form.
+        container.scrollTop = top;
+      }
+    }
+
+    function scrollBy(payload) {
+      payload = payload || {};
+      var dy = typeof payload.dy === "number" ? payload.dy : 0;
+      var behavior = payload.behavior === "smooth" ? "smooth" : "instant";
+      try {
+        container.scrollBy({ top: dy, behavior: behavior });
+      } catch (_) {
+        container.scrollTop = container.scrollTop + dy;
+      }
+    }
+
+    function imageToScreen(pt) {
+      pt = pt || {};
+      var idx = typeof pt.imageIdx === "number" ? pt.imageIdx : 0;
+      var img = imgAt(idx);
+      if (!img) return { x: 0, y: 0 };
+      var rect = img.getBoundingClientRect();
+      // Image coords are in source pixels; map to displayed pixels by
+      // multiplying by the displayed-to-natural width ratio. Height ratio
+      // is the same since `aspect-ratio` preserves it.
+      var scale = rect.width / (sources[idx] && sources[idx].width ? sources[idx].width : rect.width);
+      return {
+        x: rect.left + (pt.x || 0) * scale,
+        y: rect.top + (pt.y || 0) * scale
+      };
+    }
+
+    function screenToImage(pt) {
+      pt = pt || {};
+      var px = typeof pt.x === "number" ? pt.x : 0;
+      var py = typeof pt.y === "number" ? pt.y : 0;
+      // Hit-test which image the screen point is over.
+      for (var i = 0; i < sources.length; i++) {
+        var img = imgAt(i);
+        if (!img) continue;
+        var rect = img.getBoundingClientRect();
+        if (py >= rect.top && py <= rect.bottom) {
+          var scale = (sources[i] && sources[i].width) ? sources[i].width / rect.width : 1;
+          return {
+            imageIdx: i,
+            x: (px - rect.left) * scale,
+            y: (py - rect.top) * scale
+          };
+        }
+      }
+      // Above all / below all — return the nearest edge.
+      return { imageIdx: py < 0 ? 0 : sources.length - 1, x: 0, y: 0 };
+    }
+
+    function getScrollState() {
+      var state = opts.getState ? opts.getState() : {};
+      return {
+        scrollTop: container ? container.scrollTop : 0,
+        scrollHeight: container ? container.scrollHeight : 0,
+        viewportH: container ? container.clientHeight : 0,
+        currentImageIdx: state.currentImageIdx || 0,
+        fractionWithin: state.fractionWithin || 0
+      };
+    }
+
+    var handle = {
+      container: container,
+
+      scrollTo: scrollTo,
+      scrollBy: scrollBy,
+      imageToScreen: imageToScreen,
+      screenToImage: screenToImage,
+      getScrollState: getScrollState,
+
+      on: bus.on,
+      _emit: bus._emit,
+
+      appendNavButton: function(svg, title, onClick) {
+        return attachNavButton(navEl, svg, title, onClick);
+      }
+    };
+
+    // `openSeadragon` throws on access — Etcher's renderer adapter and any
+    // other overlay should feature-detect via `"scrollTo" in handle` (or
+    // `"openSeadragon" in handle`, which IS true here because the getter
+    // exists, but reading it throws). The error message points at the fix.
+    Object.defineProperty(handle, "openSeadragon", {
+      get: function() {
+        throw new Error(
+          "[Fresco] handle.openSeadragon is not available on Fresco.scrollStrip " +
+          "(strip mode has no OpenSeadragon viewer). Use feature detection " +
+          "(`\"scrollTo\" in handle` for strip; `\"openSeadragon\" in handle` " +
+          "is true for both, but only the viewer's getter resolves). For " +
+          "OSD-backed features, use Fresco.viewer instead."
+        );
+      },
+      configurable: false
+    });
+
+    return handle;
   }
 
   // ===========================================================================
@@ -847,6 +1112,219 @@
         try { this.viewer.destroy(); } catch (_) {}
         this.viewer = null;
       }
+    }
+  };
+
+  // ===========================================================================
+  // FrescoScrollStrip LiveView hook
+  //
+  // Native browser scroll on DOM <img> elements (one per source), with
+  // memory windowing so off-screen images get their `src` evicted to free
+  // decoded-image memory. The component server-renders the entire DOM —
+  // this hook only attaches scroll handlers, an IntersectionObserver, and
+  // the strip handle.
+  // ===========================================================================
+
+  window.FrescoHooks.FrescoScrollStrip = {
+    mounted: function() {
+      var self = this;
+      var container = self.el;
+      if (!container) return;
+
+      // The component server-rendered the data-sources payload as JSON; we
+      // need it client-side to drive scrollTo math, image-coord conversion,
+      // and the evict/restore pipeline. Fail fast (with a console warn) if
+      // it's missing or malformed — the consumer's view is broken.
+      var sourcesJson = container.dataset.sources;
+      var sources;
+      try {
+        sources = JSON.parse(sourcesJson);
+        if (!Array.isArray(sources) || sources.length === 0) throw new Error("empty");
+      } catch (_) {
+        console.warn(
+          "[Fresco] FrescoScrollStrip mount: data-sources missing or malformed", container
+        );
+        return;
+      }
+
+      var windowBefore = parseInt(container.dataset.windowBefore || "1", 10);
+      var windowAfter = parseInt(container.dataset.windowAfter || "3", 10);
+
+      // Track which image is currently dominant (by intersection ratio) so
+      // viewport-change only emits on actual changes, not on every scroll
+      // tick. fractionWithin = how far through that image the viewport top is.
+      var state = { currentImageIdx: 0, fractionWithin: 0 };
+
+      // Build the handle BEFORE wiring the scroll bridge so the bridge can
+      // emit via handle._emit, and consumers that subscribe in onViewerReady
+      // see all events (including the initial open + viewport-change).
+      var handle = makeStripHandle(container, sources, {
+        navEl: null, // strip mode is bare by default; consumers use appendNavButton
+        getState: function() { return state; }
+      });
+      self.handle = handle;
+      self.sources = sources;
+
+      // ---- Memory windowing ---------------------------------------------------
+      //
+      // The component renders every <img> with `src` set so the strip is
+      // usable without JS. Once we mount, we evict offscreen images and
+      // restore them on re-entry to keep decoded-image memory bounded.
+      // `aspect-ratio` (set in inline style by the component) keeps the
+      // layout stable through evict/restore — removing `src` doesn't
+      // collapse the slot.
+
+      var allImgs = Array.from(
+        container.querySelectorAll("[data-fresco-strip-img]")
+      );
+
+      function evictOutsideWindow(centerIdx) {
+        var lo = Math.max(0, centerIdx - windowBefore);
+        var hi = Math.min(sources.length - 1, centerIdx + windowAfter);
+        for (var i = 0; i < allImgs.length; i++) {
+          var img = allImgs[i];
+          var idx = parseInt(img.dataset.imageIdx, 10);
+          if (idx >= lo && idx <= hi) {
+            // Restore if we previously evicted.
+            if (!img.src && img.dataset.src) {
+              img.src = img.dataset.src;
+            }
+          } else {
+            // Evict. Stash the URL so we can restore later.
+            if (img.src) {
+              if (!img.dataset.src) img.dataset.src = img.src;
+              img.removeAttribute("src");
+              handle._emit("image-evicted", { imageIdx: idx });
+            }
+          }
+        }
+      }
+
+      // Fire image-loaded on every load event (including restored evictions).
+      function onImgLoad(e) {
+        var img = e.target;
+        if (!img || !img.dataset) return;
+        var idx = parseInt(img.dataset.imageIdx, 10);
+        if (!isNaN(idx)) handle._emit("image-loaded", { imageIdx: idx });
+      }
+      allImgs.forEach(function(img) {
+        img.addEventListener("load", onImgLoad);
+      });
+
+      // ---- Scroll bridge ------------------------------------------------------
+      //
+      // Native scroll → rAF-coalesced handler that computes the dominant
+      // image (highest intersection ratio with viewport) and emits the
+      // scroll + viewport-change events the handle exposes.
+
+      var pendingScroll = false;
+
+      function computeDominantImage() {
+        var cTop = container.scrollTop;
+        var cMid = cTop + container.clientHeight / 2;
+        var bestIdx = state.currentImageIdx;
+        var bestDist = Infinity;
+        for (var i = 0; i < allImgs.length; i++) {
+          var img = allImgs[i];
+          var idx = parseInt(img.dataset.imageIdx, 10);
+          var top = img.offsetTop;
+          var mid = top + img.offsetHeight / 2;
+          var dist = Math.abs(mid - cMid);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestIdx = idx;
+          }
+        }
+        // fractionWithin = how far through the dominant image the
+        // viewport-top is. 0 = top edge; 1 = bottom edge of that image.
+        var dominantImg = allImgs.find(function(img) {
+          return parseInt(img.dataset.imageIdx, 10) === bestIdx;
+        });
+        var frac = 0;
+        if (dominantImg && dominantImg.offsetHeight > 0) {
+          frac = (cTop - dominantImg.offsetTop) / dominantImg.offsetHeight;
+          if (frac < 0) frac = 0;
+          if (frac > 1) frac = 1;
+        }
+        return { currentImageIdx: bestIdx, fractionWithin: frac };
+      }
+
+      function onScrollTick() {
+        pendingScroll = false;
+        handle._emit("scroll", {
+          scrollTop: container.scrollTop,
+          scrollHeight: container.scrollHeight
+        });
+        var next = computeDominantImage();
+        if (next.currentImageIdx !== state.currentImageIdx) {
+          state.currentImageIdx = next.currentImageIdx;
+          state.fractionWithin = next.fractionWithin;
+          handle._emit("viewport-change", {
+            currentImageIdx: state.currentImageIdx,
+            fractionWithin: state.fractionWithin
+          });
+          // Re-window memory around the new center.
+          evictOutsideWindow(state.currentImageIdx);
+        } else {
+          state.fractionWithin = next.fractionWithin;
+        }
+      }
+
+      self._onScroll = function() {
+        if (pendingScroll) return;
+        pendingScroll = true;
+        window.requestAnimationFrame(onScrollTick);
+      };
+      container.addEventListener("scroll", self._onScroll, { passive: true });
+
+      // ---- Server-pushed scroll ----------------------------------------------
+      //
+      // Consumers can push `phx:scroll-to` from their LiveView (e.g., for
+      // chapter-resume restoration or programmatic snapping) with payload
+      // `{imageIdx, y, behavior}` — we forward straight to handle.scrollTo.
+
+      self._onServerScroll = function(payload) {
+        handle.scrollTo(payload || {});
+      };
+      if (typeof self.handleEvent === "function") {
+        self.handleEvent("phx:scroll-to", self._onServerScroll);
+      }
+
+      // ---- Mount sequencing ---------------------------------------------------
+      //
+      // Compute initial dominant image, evict the rest, publish the handle,
+      // fire one viewport-change so overlays have a baseline, then fire open.
+
+      var initial = computeDominantImage();
+      state.currentImageIdx = initial.currentImageIdx;
+      state.fractionWithin = initial.fractionWithin;
+      evictOutsideWindow(state.currentImageIdx);
+
+      publishReady(container.id, handle);
+
+      handle._emit("viewport-change", {
+        currentImageIdx: state.currentImageIdx,
+        fractionWithin: state.fractionWithin
+      });
+      handle._emit("open", { sources: sources });
+    },
+
+    updated: function() {
+      // For now, sources are immutable after mount. If the consumer
+      // re-renders with a different :sources list, the simplest thing is
+      // for them to change the `:id` of the component so LiveView remounts
+      // the hook — same pattern as <Fresco.viewer>'s data-src/data-sources
+      // pre-0.1.1 (before swapSourcePreservingBounds existed).
+    },
+
+    destroyed: function() {
+      if (this.el && this.el.id) unpublish(this.el.id);
+      if (this._onScroll && this.el) {
+        this.el.removeEventListener("scroll", this._onScroll);
+        this._onScroll = null;
+      }
+      this.handle = null;
+      this.sources = null;
     }
   };
 })();

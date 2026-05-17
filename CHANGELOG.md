@@ -4,6 +4,102 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.4.0 — 2026-05-18
+
+New sibling component for long-scroll reading content:
+**`<Fresco.scroll_strip>`**. Native DOM `<img>` + browser scroll, no
+OpenSeadragon, no per-frame JS, native 60fps on iOS Safari for
+manhwa / long comics / IG-style feeds. Existing `<Fresco.viewer>`
+is untouched — strip mode is an *additional* primitive for a
+different shape of content.
+
+The architectural rationale: `<Fresco.viewer>` (OSD-backed) is
+correct for deep-zoom imagery and wrong for vertical-image-strip
+reading. OSD redraws the canvas per pan frame; the `pan_optimized`
+fast-path partially helps but fails on large snaps that move
+beyond the painted viewport area ("half-render then POP"). Native
+browser scroll on DOM `<img>` is GPU-composited and effectively
+free per frame. Strip mode delivers exactly that, plus memory
+windowing so a long chapter doesn't pin hundreds of MB of
+decoded-image pixels.
+
+### Added
+
+- **New Phoenix.Component `Fresco.ScrollStrip`** (`<Fresco.scroll_strip>`).
+  Attrs: `:id`, `:sources` (list of `%{url, width, height}` maps,
+  `:width` + `:height` mandatory), `:class`, `:theme`,
+  `:window_before` (default `1`), `:window_after` (default `3`),
+  `:gap_px` (default `0`), `:snap_to_image` (default `:off`,
+  values `[:off, :mandatory, :proximity]`).
+- **New JS hook `FrescoScrollStrip`** in `priv/static/fresco.js`.
+  Wires the scroll bridge (rAF-coalesced), the memory-windowing
+  loop (evict `src` outside `[current - window_before, current +
+  window_after]`; restore on re-entry; CSS `aspect-ratio` keeps
+  the layout stable through both), and the handle registry. Also
+  routes `phx:scroll-to` from the consumer's LiveView straight to
+  `handle.scrollTo/1` for chapter-resume / programmatic snap use
+  cases.
+- **New strip handle** with surface: `container`, `on`, `_emit`,
+  `appendNavButton` (shared with the viewer handle via lifted
+  helpers); plus strip-specific `scrollTo({imageIdx, y, behavior})`,
+  `scrollBy({dy, behavior})`, `imageToScreen({imageIdx, x, y})`,
+  `screenToImage({x, y}) → {imageIdx, x, y}`, and
+  `getScrollState()`. Events: `scroll`, `viewport-change`,
+  `image-loaded`, `image-evicted`, `open` — emitted only when an
+  actual change happens (e.g., `viewport-change` doesn't fire on
+  every scroll tick, only when the dominant image index changes).
+- **New registry lookups** `Fresco.scrollStripFor(domId)` (alias
+  of `viewerFor` for ergonomic consumer code) and `Fresco.onReady`
+  (alias of `onViewerReady`). Both share the existing registry —
+  same handle store, same queue, same semantics.
+- **`handle.openSeadragon` on strip handles is a throwing getter**.
+  Strip mode has no OSD; accessing it from an overlay usually
+  means the overlay was written for the viewer host without a
+  renderer adapter. The thrown error message points at the fix
+  (feature-detect via `"scrollTo" in handle`).
+
+### Changed (internal refactor; no behavior change for viewer
+consumers)
+
+- **Extracted `createEventBus()` helper.** Both the viewer handle
+  (`makeHandle`) and the new strip handle (`makeStripHandle`)
+  return the same `on(name, fn) → unsubscribe` channel and the
+  same internal `_emit(name, payload)`. Pulling the closure-based
+  event-emitter out keeps both factories in sync.
+- **Extracted `attachNavButton(navEl, svg, title, onClick)` helper.**
+  Same body the viewer's `appendNavButton` had inline; lifted so
+  the strip handle reuses it without code duplication. When
+  `navEl` is null (strip's default — no built-in nav), returns a
+  no-op unsubscribe so callers can call `appendNavButton`
+  unconditionally.
+
+### Notes
+
+- **Strip mode ships with no built-in nav.** Strip is meant to be
+  minimal — consumers who want a fullscreen button or
+  scroll-to-top affordance add them via
+  `handle.appendNavButton(...)`. The viewer's zoom-in/out/reset/
+  fullscreen overlay doesn't apply (no zoom; "reset view" has no
+  meaning when natural scroll position is the only state).
+- **No breaking changes for existing consumers.** All viewer
+  attrs, events, the OSD escape hatch, `pan_optimized`, the
+  `fast-pan` event — all unchanged. The internal refactor (event
+  bus + nav-button helpers) is purely structural; the surfaces
+  match what 0.3.x emitted.
+- **Etcher >= 0.3 is required for annotations on strip mode.**
+  Etcher 0.2 paired with a strip handle will hit the throwing
+  `openSeadragon` getter and fail loudly — by design (silent
+  drift would be worse). Etcher 0.3 ships a renderer adapter
+  that feature-detects via `"scrollTo" in handle` and dispatches
+  to a strip-positioning module. Annotations on the viewer host
+  continue to work with Etcher 0.2 or 0.3.
+- **No horizontal strip yet.** Most "horizontal" image
+  consumption (manga RTL, IG carousels) is paginated rather than
+  continuous-scroll, so true horizontal continuous scroll is
+  rare. The handle API uses object payloads (`{imageIdx, y}`,
+  `{x, y}`) so a future `Fresco.scroll_strip_h` is a sibling
+  component, not a breaking change here.
+
 ## 0.3.2 — 2026-05-17
 
 Fix `:pan_optimized` getting stuck for any caller that pans with

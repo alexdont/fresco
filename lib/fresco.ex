@@ -42,8 +42,27 @@ defmodule Fresco do
         function(url) { return url; }   // OSD accepts a DZI URL directly
       );
 
-  See `Fresco.Viewer` for the component reference.
+  See `Fresco.Viewer` for the component reference, and `Fresco.ScrollStrip`
+  for the long-scroll reader counterpart (`<Fresco.scroll_strip>`).
+
+  ## Two component shapes
+
+  - **`<Fresco.viewer>`** — OpenSeadragon-backed pan/zoom for deep-zoom
+    imagery, museum scans, big single images. Use when the user is
+    panning *around* a single image and may want to zoom in.
+  - **`<Fresco.scroll_strip>`** — native DOM `<img>` + browser scroll for
+    long-form vertical strips (manhwa, comics, IG feeds). Use when the
+    user is reading by scrolling *through* a stack of images at one zoom
+    level. No canvas redraw per frame; native 60fps on mobile.
+
+  Both share the registry — `window.Fresco.onReady(domId, callback)` works
+  for either, and the handle each one yields exposes a partly-shared
+  surface (`container`, `on`, `appendNavButton`) plus its own kind-specific
+  methods (viewer: `imageToScreen` / `fitBounds` / OSD; strip: `scrollTo`
+  / `scrollBy` / `getScrollState`). Feature-detect with
+  `"scrollTo" in handle` to dispatch between them.
   """
 
   defdelegate viewer(assigns), to: Fresco.Viewer
+  defdelegate scroll_strip(assigns), to: Fresco.ScrollStrip
 end

@@ -155,6 +155,116 @@ window.Fresco.onViewerReady("reader", function (handle) {
 
 ---
 
+## Strip mode for long-scroll content
+
+When the user is **reading by scrolling** through a stack of full-width images — manhwa / manga, long-form comics, IG-style feeds, documentation snapshots — the OpenSeadragon-backed `<Fresco.viewer>` is the wrong architecture. OSD redraws its `<canvas>` on every pan frame; on iOS Safari that burns most of the 16ms 60fps budget for content that doesn't need zoom. The `pan_optimized` fast-path partially helps but breaks down on large snaps that move past the painted viewport area.
+
+`<Fresco.scroll_strip>` is a sibling component for this exact case. Native browser scroll on DOM `<img>` elements. No canvas. No spring math. No per-frame JS. Memory windowing evicts off-screen image `src` attributes so a 50-image chapter doesn't pin hundreds of MB of decoded pixels.
+
+```heex
+<Fresco.scroll_strip
+  id="reader"
+  sources={[
+    %{url: "/img/page-01.jpg", width: 720, height: 9200},
+    %{url: "/img/page-02.jpg", width: 720, height: 8800},
+    %{url: "/img/page-03.jpg", width: 720, height: 9100}
+  ]}
+  class="w-full h-lvh"
+/>
+```
+
+### When to use which
+
+| | `<Fresco.viewer>` | `<Fresco.scroll_strip>` |
+|---|---|---|
+| **Use case** | Deep-zoom imagery; single mega-image you pan/zoom around | Long-scroll reading; stack of full-width images |
+| **Rendering** | OpenSeadragon canvas | DOM `<img>` + native scroll |
+| **Zoom** | Yes (wheel, pinch, buttons) | No (one zoom level — full width) |
+| **Pan** | OSD viewport math + spring | Native browser scroll |
+| **Mobile 60fps** | Tricky (canvas redraw); `pan_optimized` helps | Free — native scroll is GPU-composited |
+| **Memory** | OSD's tile lifecycle | Manual `src` evict outside ±N window |
+| **Etcher overlays** | Yes, via OSD coords | Yes (Etcher >= 0.3 required — uses per-image coords) |
+
+### Source-map requirements
+
+Each source must include `:url`, `:width`, and `:height` (in source pixels). Width and height drive the `aspect-ratio` CSS on each `<img>`, which is what makes memory windowing safe — removing `src` doesn't collapse the slot, so the scroll position never jumps. Omitting either dimension raises `ArgumentError` at render time.
+
+### The handle contract
+
+Look up the strip handle the same way as a viewer (or use the `onReady` alias):
+
+```js
+window.Fresco.onReady("reader", function (handle) {
+  // Scroll commands — replace panTo / panBy
+  handle.scrollTo({imageIdx: 3, y: 0, behavior: "smooth"});
+  handle.scrollBy({dy: 500, behavior: "instant"});
+
+  // State for progress UI / chapter resume
+  handle.getScrollState();
+  // → { scrollTop, scrollHeight, viewportH, currentImageIdx, fractionWithin }
+
+  // Coordinate adapters (per-image)
+  handle.imageToScreen({imageIdx: 0, x: 100, y: 200});
+  handle.screenToImage({x: 400, y: 800});
+  // → { imageIdx, x, y }
+
+  // Events
+  handle.on("scroll", function (e) { /* e.scrollTop, e.scrollHeight (rAF-throttled) */ });
+  handle.on("viewport-change", function (e) { /* e.currentImageIdx, e.fractionWithin */ });
+  handle.on("image-loaded", function (e) { /* e.imageIdx */ });
+  handle.on("image-evicted", function (e) { /* e.imageIdx */ });
+  handle.on("open", function (e) { /* e.sources — fires once on mount */ });
+
+  // Nav extension (strip ships with no built-in nav by default)
+  handle.appendNavButton(svgString, "My button", function () { /* … */ });
+});
+```
+
+### Server-pushed scrolling
+
+For chapter-resume / programmatic snapping:
+
+```elixir
+push_event(socket, "phx:scroll-to", %{imageIdx: 5, y: 0, behavior: "smooth"})
+```
+
+The hook forwards the payload straight to `handle.scrollTo/1`.
+
+### Memory windowing
+
+Default keeps `±1 / ±3` images loaded around the dominant visible image. Configure with `:window_before` and `:window_after`:
+
+```heex
+<Fresco.scroll_strip
+  id="reader"
+  sources={@sources}
+  window_before={2}
+  window_after={5}
+/>
+```
+
+Images outside the window get `src` evicted; on re-entry, `src` is restored and `image-loaded` fires. The `aspect-ratio` style on every `<img>` (computed from your source's width/height) keeps the layout perfectly stable through evict/restore cycles — no scroll jumps.
+
+### Optional CSS scroll-snap
+
+For IG-feed-style content (one image per screen):
+
+```heex
+<Fresco.scroll_strip id="feed" sources={@sources} snap_to_image={:mandatory} />
+```
+
+Accepts `:off` (default), `:mandatory`, `:proximity`. For tall continuous content (manhwa pages), keep at `:off` — snap would either lock you to image tops or yank mid-read.
+
+### Etcher annotations
+
+Etcher `>= 0.3` is required to render annotations on strip mode. Etcher's renderer adapter feature-detects via `"scrollTo" in handle` and dispatches to a strip-positioning module that inserts overlay nodes as siblings of the `<img>` elements — they scroll with the content natively, no per-frame positioning needed. Annotation payloads gain an `imageIdx` field (defaults to `0` for back-compat with viewer annotations).
+
+`handle.openSeadragon` is intentionally a **throwing getter** on the strip handle — accessing it usually means an overlay was written for the viewer host without a renderer adapter, and the thrown message points at the fix. Etcher 0.2 paired with a strip handle will see the error and fail loudly; that's by design.
+
+> ⚠️ **No zoom in strip mode.** If your reader needs occasional zoom (pinch / double-tap), use `<Fresco.viewer>` instead — strip mode is one zoom level by design.
+
+---
+
 ## Rotation
 
 Opt-in 90° rotation button. Adds a fifth button to the nav column that rotates the image 90° clockwise each click. Rotation is tracked independently of zoom/pan, so "Reset view" recenters without un-rotating.
