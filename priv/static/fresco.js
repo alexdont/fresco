@@ -2,10 +2,9 @@
 //
 // Hand-rolled CSS-transform pan/zoom engine. Zero external JS deps; no
 // canvas, no tile pyramids, no spring math, no CDN load. The single <img>
-// lives inside a stage div; `transform: translate3d(tx, ty, 0) scale(s)`
-// on the stage handles all motion. Native Pointer Events drive gestures;
-// native Fullscreen API handles fullscreen. The whole engine is small
-// enough that consumers can audit every line.
+// (or N <img>s for <Fresco.canvas>) lives inside a stage div; the engine
+// translates the stage and sizes each img per-frame. Native Pointer Events
+// drive gestures; native Fullscreen API handles fullscreen.
 //
 // Public surface (unchanged from 0.4.x where compatible):
 //
@@ -24,21 +23,23 @@
 //     on(eventName, handler) → unsubscribe,
 //     appendNavButton(svg, title, onClick) → unsubscribe (+ .setIcon/.setTitle/.el) }
 //
+// Canvas handle (additionally):
+//
+//   { getCanvasSize(), getImages(), imageBoundsFor(id), fitImage(id),
+//     getExtension(name) }
+//
 // Events fired through `handle.on(eventName, fn)`:
-//   "zoom" / "pan" / "open" / "resize"           — fired on intent (gesture start, source open, viewport resize)
-//   "animation" / "update-viewport"              — fired per-frame, whenever the transform is rewritten
+//   "zoom" / "pan" / "open" / "resize"           — fired on intent
+//   "animation" / "update-viewport"              — fired per-frame
+//   "image-loaded"                               — canvas only; per-image load events
 //
 // Notes vs. 0.4.x:
 //   - `handle.openSeadragon` / `handle.viewer` are gone. The engine is no
 //     longer OSD-backed; there's no underlying instance to escape to.
-//   - `getViewportBounds()` returns image-pixel coords `{x, y, width, height}`,
-//     not OSD-normalized 0–1 rects.
+//   - `getViewportBounds()` returns image-pixel (viewer) or canvas-pixel
+//     (canvas) coords `{x, y, width, height}`, not OSD-normalized 0–1 rects.
 //   - `fitBounds(..., immediately)` ignores `immediately` — the lite engine
 //     has no animation system in 0.5.x.
-//   - The `fast-pan` event is gone (no canvas redraw to coordinate around).
-//     Overlays attached as children of `.fresco-stage` get the transform
-//     for free; overlays driven by `on("zoom"|"pan"|"animation")` continue
-//     to work.
 //
 // Parent app wiring:
 //   import "../../deps/fresco/priv/static/fresco.js"
@@ -61,7 +62,6 @@
   var readyCallbacks = {};        // domId → [callback, …]
   var sourceProviders = [];       // [{predicate, factory}]
 
-  // Default source provider — last in the chain. Handles plain image URLs.
   sourceProviders.push({
     predicate: function() { return true; },
     factory: function(url) { return { type: "image", url: url }; }
@@ -81,8 +81,6 @@
       return viewerRegistry[domId] || null;
     },
 
-    // Same lookup as viewerFor; named separately so consumer code self-documents
-    // which host shape it expects. Both share the registry.
     scrollStripFor: function(domId) {
       return viewerRegistry[domId] || null;
     },
@@ -94,15 +92,10 @@
       readyCallbacks[domId].push(callback);
     },
 
-    // Alias for onViewerReady. The strip handle isn't a "viewer" colloquially —
-    // callers reading scrollStrip code find onReady more natural.
     onReady: function(domId, callback) {
       return window.Fresco.onViewerReady(domId, callback);
     },
 
-    // Register a source provider. Predicate is called with the source URL
-    // before the default provider; first match wins. Providers added later
-    // take precedence over the default (which always matches).
     registerSourceProvider: function(predicate, factory) {
       sourceProviders.unshift({ predicate: predicate, factory: factory });
     }
@@ -131,7 +124,7 @@
   };
 
   // ===========================================================================
-  // Styles — one stylesheet for both viewer and strip. The six --fresco-*
+  // Styles — one stylesheet for viewer, canvas, and strip. The six --fresco-*
   // custom properties are the entire palette surface (system / light / dark /
   // inherit branches below). Structural rules apply regardless of theme.
   // ===========================================================================
@@ -162,10 +155,7 @@
       "}",
       ".fresco-nav svg { width: 18px; height: 18px; }",
 
-      // ── Viewer host theming ─────────────────────────────────────────────
-      // Six --fresco-* custom properties drive the palette. The `inherit`
-      // theme opts out of every Fresco-supplied declaration so the parent
-      // app's CSS supplies the values (typically mapped to daisyUI tokens).
+      // ── Host theming ────────────────────────────────────────────────────
       ".fresco-viewer:not([data-fresco-theme=\"inherit\"]) {",
       "  --fresco-bg: #fafafa;",
       "  --fresco-grid-dot: #d4d4d8;",
@@ -174,14 +164,9 @@
       "  --fresco-nav-fg: #fff;",
       "  --fresco-nav-focus: rgba(255, 255, 255, 0.7);",
       "}",
-      // Structural rules — apply to every viewer regardless of theme.
-      // `touch-action: none` is critical for iOS Safari: without it the
-      // browser intercepts pinch + horizontal swipe (back-navigation) before
-      // our PointerEvent handlers see them.
-      // `user-select: none` blocks the i-beam highlight on the host so
-      // mouse-drag pan doesn't look like a text selection in flight.
-      // `cursor: grab` signals draggability; the engine swaps it to
-      // `grabbing` during pointer gestures (via inline style).
+      // `touch-action: none` is critical for iOS Safari (blocks browser pinch).
+      // `user-select: none` blocks i-beam highlight on the host.
+      // `cursor: grab` signals draggability; engine swaps to `grabbing` via class.
       ".fresco-viewer {",
       "  position: relative; overflow: hidden;",
       "  touch-action: none;",
@@ -194,14 +179,9 @@
       "  outline: none;",
       "}",
       ".fresco-viewer.fresco--dragging { cursor: grabbing; }",
-      // Stage: the transformed surface holding the image. `transform-origin: 0 0`
-      // pairs with our (tx, ty, s) math — translate first, then scale around
-      // the stage's top-left, which is what makes `imageToScreen` correct.
-      // The combo `will-change: transform` + `backface-visibility: hidden`
-      // + a 3D transform string (`translate3d` + `scale3d` in apply()) keeps
-      // the layer permanently composited on a single GPU plane. Without all
-      // three, the browser re-rasterizes the layer the first time a zoom
-      // threshold is crossed — visible as a one-time flash on the image.
+      // Stage: transformed surface holding the image(s). `transform-origin: 0 0`
+      // pairs with the engine's (tx, ty, s) math. `will-change: transform` +
+      // `backface-visibility: hidden` keep the layer permanently composited.
       ".fresco-stage {",
       "  position: absolute; top: 0; left: 0;",
       "  transform-origin: 0 0;",
@@ -209,11 +189,9 @@
       "  backface-visibility: hidden;",
       "  -webkit-backface-visibility: hidden;",
       "}",
-      // The stage <img> MUST be at its natural pixel size — the engine's
-      // (tx, ty, s) math computes positions from `img.naturalWidth/Height`.
-      // CSS resets like Tailwind v4's preflight (`img { max-width: 100% }`)
-      // shrink the img's layout box and throw the transform math off, so
-      // we explicitly opt out of any width/max-width clamping here.
+      // Stage <img>s must NOT be CSS-shrunk by framework resets. The engine
+      // sizes each img inline via width/height per frame; Tailwind preflight's
+      // `img { max-width: 100% }` would override our math without this.
       ".fresco-stage img {",
       "  display: block;",
       "  max-width: none;",
@@ -224,15 +202,7 @@
       "  -webkit-user-drag: none;",
       "  pointer-events: none;",
       "}",
-      // (No CSS transition by design.) The engine sizes the <img> via its
-      // CSS width/height (so the rasterized layer never has to upgrade
-      // across zoom thresholds — that was the cause of the one-time
-      // flash). A CSS transition would only animate the stage's translate
-      // — the img resize would jump instantly — so the image would visibly
-      // grow first, then slide into position. Better to snap instantly
-      // and add a JS-driven animation later if needed.
-      // System mode: follow OS preference. Excluded for explicit light or
-      // inherit modes.
+      // System mode: follow OS preference. Excluded for explicit light or inherit.
       "@media (prefers-color-scheme: dark) {",
       "  .fresco-viewer:not([data-fresco-theme=\"light\"]):not([data-fresco-theme=\"inherit\"]) {",
       "    --fresco-bg: #0a0a0a;",
@@ -331,7 +301,7 @@
   }
 
   // ===========================================================================
-  // Shared event-bus helper. Used by the viewer handle and the strip handle.
+  // Shared event-bus helper. Used by the viewer, canvas, and strip handles.
   // ===========================================================================
 
   function createEventBus() {
@@ -359,9 +329,7 @@
 
   // ===========================================================================
   // Shared nav-button attach helper. Returns an unsubscribe function carrying
-  // `.setIcon(svg) / .setTitle(text) / .el` so callers can mutate after
-  // creation without re-adding. When `navEl` is null (strip without a built-in
-  // nav), returns a no-op so callers can call `appendNavButton` unconditionally.
+  // `.setIcon(svg) / .setTitle(text) / .el`. No-op when navEl is null.
   // ===========================================================================
 
   function attachNavButton(navEl, svg, title, onClick) {
@@ -381,127 +349,107 @@
   }
 
   // ===========================================================================
-  // Viewer engine — the new lite pan/zoom controller.
-  //
-  // State lives in closure-locals; no classes. The stage div (server-rendered
-  // as a child of the host) receives `transform: translate3d(tx, ty, 0) scale(s)`.
-  // All gestures mutate (tx, ty, s); a single rAF-coalesced apply() writes the
-  // transform and emits events.
-  //
-  // Clamping (default mode): the image must cover the viewport — sMin = sFit
-  // (image fits viewport), pan clamped so no void shows past edges.
-  // Infinite-canvas mode: no pan clamp, sMin lowered to sFit * 0.05.
+  // Nav overlay — four buttons (fullscreen, zoom-in, zoom-out, reset). The
+  // host element provides relative positioning (set in CSS), and the nav
+  // attaches as a child so extensions can append more buttons via
+  // `handle.appendNavButton(...)`.
   // ===========================================================================
 
-  function mountFrescoViewer(el) {
-    // ── DOM ────────────────────────────────────────────────────────────────
-    var stage = el.querySelector("[data-fresco-stage]") || el.querySelector(".fresco-stage");
-    var img = stage && stage.querySelector("[data-fresco-img]");
+  function buildNav(host, handlers) {
+    injectStyles();
+    var nav = document.createElement("div");
+    nav.className = "fresco-nav";
+    nav.appendChild(makeButton(ICONS.expand, "Toggle fullscreen", handlers.onFullscreen));
+    nav.appendChild(makeButton(ICONS.zoomIn, "Zoom in",  handlers.onZoomIn));
+    nav.appendChild(makeButton(ICONS.zoomOut, "Zoom out", handlers.onZoomOut));
+    nav.appendChild(makeButton(ICONS.reset,  "Reset view", handlers.onFit));
+    host.appendChild(nav);
+    return nav;
+  }
 
-    if (!stage || !img) {
-      console.warn("[Fresco] mount: missing .fresco-stage or <img> inside", el);
-      return null;
-    }
+  // ===========================================================================
+  // Shared transform engine — drives both <Fresco.viewer> (single image) and
+  // <Fresco.canvas> (N images at canvas-pixel coords). The math is identical;
+  // only what gets sized per-frame differs.
+  //
+  // Callers provide:
+  //   getNaturalSize() → {w, h}   // viewer: image natural dims; canvas: canvas extent
+  //   applyChildren(s)             // viewer: resize one <img>; canvas: re-layout all <img>s
+  //
+  // The engine owns state (tx, ty, s, vw, vh, …), gestures, fit/clamp math,
+  // ResizeObserver, the nav overlay, the event bus, and teardown.
+  // ===========================================================================
 
-    // Apply touch-action inline too — the stylesheet may not yet have
-    // applied when iOS Safari processes the first pinch.
-    el.style.touchAction = "none";
-
-    // Belt-and-suspenders against framework resets (Tailwind preflight, etc.)
-    // that apply `max-width: 100%` to <img>. The engine assumes the img is
-    // at natural pixel size; if a framework rule wins (e.g., loaded after
-    // Fresco's stylesheet), the transform math produces an off-center
-    // result. Inline styles beat any stylesheet rule.
-    img.style.maxWidth = "none";
-    img.style.maxHeight = "none";
-    img.style.width = "auto";
-    img.style.height = "auto";
-
-    var infiniteCanvas = el.dataset.infiniteCanvas === "true";
+  function createTransformEngine(opts) {
+    var el             = opts.el;
+    var stage          = opts.stage;
+    var getNaturalSize = opts.getNaturalSize;
+    var applyChildren  = opts.applyChildren;
+    var infiniteCanvas = !!opts.infiniteCanvas;
 
     // ── State ──────────────────────────────────────────────────────────────
-    var tx = 0, ty = 0, s = 1;            // current transform
-    var iw = 0, ih = 0;                   // image natural dimensions (set on load)
-    var vw = 0, vh = 0;                   // viewport dimensions (ResizeObserver-tracked)
-    var sFit = 1;                         // cached fit-to-view scale
-    var sMin = 1, sMax = 40;              // zoom bounds (recomputed when sFit changes)
-    var currentSrc = img.getAttribute("src") || el.dataset.src || "";
+    var tx = 0, ty = 0, s = 1;
+    var nw = 0, nh = 0;          // natural extent (image natural for viewer; canvas dims for canvas)
+    var vw = 0, vh = 0;          // viewport
+    var sFit = 1, sMin = 1, sMax = 8;
     var frameRequested = false;
-    var ready = false;                    // becomes true once the first fit() runs
-
+    var ready = false;
     var bus = createEventBus();
-
-    // Pointer tracking. Map<pointerId, {x, y}> in *page* coords (we convert to
-    // viewport-local where needed via getBoundingClientRect()).
     var pointers = new Map();
-    // gestureStart is null when idle; otherwise a snapshot taken at the moment
-    // the gesture started (1-pointer pan, 2-pointer pinch).
     var gestureStart = null;
 
-    // ── Transform math ─────────────────────────────────────────────────────
-
-    function clamp(v, lo, hi) {
-      return v < lo ? lo : v > hi ? hi : v;
-    }
+    // ── Math ───────────────────────────────────────────────────────────────
+    function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
     function recomputeBounds() {
-      // sFit = the scale at which the image just fits inside the viewport
-      // (CONTAIN). In default (clamped) mode, this is also the minimum zoom.
-      // In infinite-canvas mode, the user can zoom out further (to thumbnail).
-      if (iw > 0 && ih > 0 && vw > 0 && vh > 0) {
-        sFit = Math.min(vw / iw, vh / ih);
+      if (nw > 0 && nh > 0 && vw > 0 && vh > 0) {
+        sFit = Math.min(vw / nw, vh / nh);
       } else {
         sFit = 1;
       }
       sMin = infiniteCanvas ? sFit * 0.05 : sFit;
-      // sMax — twin cap. (1) Hard absolute: 8× natural pixel size, matching
-      // OSD's old `maxZoomPixelRatio: 8`. (2) GPU safety: never let the
-      // rasterized layer cross MAX_RASTER_DIM on either axis, or the browser
-      // re-allocates the texture mid-zoom and the image flashes. 4096 is
-      // safe on every mainstream GPU including mobile Safari; 8192 also
-      // works on modern desktops. Going past these causes the flash the
-      // user reported.
+      // GPU safety: keep the rasterized layer under MAX_RASTER_DIM on each
+      // axis or the browser re-rasterizes mid-zoom (the one-time flash bug).
       var MAX_RASTER_DIM = 8192;
-      var rasterCap = MAX_RASTER_DIM / Math.max(iw || 1, ih || 1);
+      var rasterCap = MAX_RASTER_DIM / Math.max(nw || 1, nh || 1);
       sMax = Math.min(8, rasterCap);
-      // Don't let sMax fall below sFit (would be a contradiction — can't
-      // zoom in past fit), or below a small absolute floor for safety.
       if (sMax < sFit) sMax = sFit;
       if (sMax < 1) sMax = Math.max(sFit, 1);
     }
 
     function clampPan() {
       if (infiniteCanvas) return;
-      // Default mode: image must cover the viewport. If image larger than
-      // viewport along an axis, clamp tx/ty so edges don't pull inside.
-      // If smaller (only happens when image fits exactly at sFit on the
-      // limiting axis), center on that axis.
-      var imgW = iw * s;
-      var imgH = ih * s;
-      if (imgW >= vw) {
-        tx = clamp(tx, vw - imgW, 0);
-      } else {
-        tx = (vw - imgW) / 2;
-      }
-      if (imgH >= vh) {
-        ty = clamp(ty, vh - imgH, 0);
-      } else {
-        ty = (vh - imgH) / 2;
-      }
+      var w = nw * s, h = nh * s;
+      if (w >= vw) { tx = clamp(tx, vw - w, 0); } else { tx = (vw - w) / 2; }
+      if (h >= vh) { ty = clamp(ty, vh - h, 0); } else { ty = (vh - h) / 2; }
+    }
+
+    // Re-read natural size + viewport from the DOM, recompute bounds, re-clamp.
+    // Use this when source dimensions changed (image load, layout swap) but
+    // you don't want to force a refit (preserves user's current zoom intent).
+    function refresh() {
+      var n = getNaturalSize();
+      nw = n.w || 0;
+      nh = n.h || 0;
+      var rect = el.getBoundingClientRect();
+      vw = rect.width;
+      vh = rect.height;
+      recomputeBounds();
+      if (s < sMin) s = sMin;
+      if (s > sMax) s = sMax;
+      clampPan();
     }
 
     function fit() {
-      recomputeBounds();
+      refresh();
       s = sFit;
-      tx = (vw - iw * s) / 2;
-      ty = (vh - ih * s) / 2;
+      tx = (vw - nw * s) / 2;
+      ty = (vh - nh * s) / 2;
       clampPan();
       requestFrame();
     }
 
     function zoomAt(px, py, k) {
-      // (px, py) viewport-local. Scale around that point so the image-space
-      // pixel under it stays put.
       var s2 = clamp(s * k, sMin, sMax);
       if (s2 === s) return;
       var kEff = s2 / s;
@@ -514,33 +462,22 @@
     }
 
     function panBy(dx, dy) {
-      tx += dx;
-      ty += dy;
+      tx += dx; ty += dy;
       clampPan();
       bus._emit("pan", { tx: tx, ty: ty });
       requestFrame();
     }
 
     function setTransform(nextTx, nextTy, nextS) {
-      tx = nextTx;
-      ty = nextTy;
+      tx = nextTx; ty = nextTy;
       s = clamp(nextS, sMin, sMax);
       clampPan();
       requestFrame();
     }
 
     function apply() {
-      // Two-part write per frame:
-      // (1) the <img> takes its scaled CSS size — the browser renders the
-      //     image at its current visible dimensions as plain layout, so it
-      //     never has to upgrade a composited-layer texture mid-zoom (which
-      //     was the source of the one-time flash);
-      // (2) the stage carries translate3d only — pan is a pure GPU
-      //     composite move, no layout, still 60fps smooth.
-      img.style.width = (iw * s) + "px";
-      img.style.height = (ih * s) + "px";
-      stage.style.transform =
-        "translate3d(" + tx + "px, " + ty + "px, 0)";
+      applyChildren(s);
+      stage.style.transform = "translate3d(" + tx + "px, " + ty + "px, 0)";
       bus._emit("animation", { tx: tx, ty: ty, scale: s });
       bus._emit("update-viewport", { tx: tx, ty: ty, scale: s });
     }
@@ -554,56 +491,40 @@
       });
     }
 
-    function setTransitioning(_on) {
-      // No-op for now — kept as a hook for a future JS-driven smooth-zoom
-      // animation. (CSS transitions don't work cleanly with the
-      // width/height-on-img rendering approach because the img resize
-      // can't be synchronized with a transform-only transition.)
-      el.classList.remove("fresco--transitioning");
-    }
-
-    // ── Pointer gestures (mouse + touch + pen, unified) ────────────────────
-
-    function viewportRect() {
-      return el.getBoundingClientRect();
-    }
-
-    function midpoint(p1, p2) {
-      return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
-    }
-
+    // ── Gestures ───────────────────────────────────────────────────────────
+    function viewportRect() { return el.getBoundingClientRect(); }
+    function midpoint(p1, p2) { return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }; }
     function distance(p1, p2) {
       var dx = p2.x - p1.x, dy = p2.y - p1.y;
       return Math.sqrt(dx * dx + dy * dy);
     }
 
+    function isFromNav(e) {
+      return e.target && e.target.closest && (
+        e.target.closest(".fresco-nav") ||
+        e.target.closest("[data-fresco-no-capture]")
+      );
+    }
+
     function snapshotGesture() {
-      // Take a fresh snapshot of the current pointers and viewport, used at
-      // gesture start and whenever the pointer count changes (going from 2 → 1,
-      // for example). All viewport-local coords are derived from page coords
-      // at snapshot time so subsequent moves are just deltas off the snapshot.
       var rect = viewportRect();
       var pts = Array.from(pointers.values());
       if (pts.length === 1) {
         gestureStart = {
           kind: "pan",
           tx: tx, ty: ty,
-          x: pts[0].x, y: pts[0].y,
-          rectLeft: rect.left, rectTop: rect.top
+          x: pts[0].x, y: pts[0].y
         };
       } else if (pts.length >= 2) {
         var mid = midpoint(pts[0], pts[1]);
         gestureStart = {
           kind: "pinch",
           tx: tx, ty: ty, s: s,
-          // midpoint in viewport-local coords (anchor for the zoom)
           midX: mid.x - rect.left,
           midY: mid.y - rect.top,
-          // page-coords midpoint for delta tracking (so pinch can also pan)
           pageMidX: mid.x,
           pageMidY: mid.y,
-          dist: distance(pts[0], pts[1]),
-          rectLeft: rect.left, rectTop: rect.top
+          dist: distance(pts[0], pts[1])
         };
       } else {
         gestureStart = null;
@@ -611,25 +532,11 @@
     }
 
     function onPointerDown(e) {
-      // Only primary buttons drive gestures — secondary/middle-click should
-      // bubble (browsers use them for context menu, scroll, etc.).
       if (e.pointerType === "mouse" && e.button !== 0) return;
-      // Don't steal pointer events that originated inside the nav (or any
-      // interactive element marked with `data-fresco-no-capture`). Without
-      // this guard, setPointerCapture on the host would hijack the pointer
-      // before the button's click sequence completes, and nothing would
-      // happen when the user clicks zoom-in / reset / fullscreen. The same
-      // guard runs in onWheel and onDblClick so scrolling/double-clicking
-      // over a button doesn't bleed through to the engine either.
       if (isFromNav(e)) return;
-      // Critical: preventDefault stops Chrome from initiating its built-in
-      // drag-image / text-selection gestures over the viewer. Without this,
-      // mouse-drag pan turns into "save image" or i-beam selection, and
-      // pointer capture never engages cleanly.
       e.preventDefault();
       try { el.setPointerCapture(e.pointerId); } catch (_) {}
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      setTransitioning(false);
       el.classList.add("fresco--dragging");
       snapshotGesture();
     }
@@ -657,14 +564,11 @@
         if (newDist === 0) return;
         var newMid = midpoint(pts[0], pts[1]);
 
-        // Step 1: zoom around the start midpoint (anchor stays fixed for
-        // the duration of the pinch — feels more stable than re-anchoring).
         var s2 = clamp(gestureStart.s * (newDist / gestureStart.dist), sMin, sMax);
         var kEff = s2 / gestureStart.s;
         var newTx = gestureStart.midX - (gestureStart.midX - gestureStart.tx) * kEff;
         var newTy = gestureStart.midY - (gestureStart.midY - gestureStart.ty) * kEff;
 
-        // Step 2: pan by the midpoint delta so users can also "drag" mid-pinch.
         newTx += (newMid.x - gestureStart.pageMidX);
         newTy += (newMid.y - gestureStart.pageMidY);
 
@@ -679,8 +583,6 @@
     function onPointerUp(e) {
       pointers.delete(e.pointerId);
       try { el.releasePointerCapture(e.pointerId); } catch (_) {}
-      // If we drop from pinch → pan, snapshot the remaining pointer so the
-      // subsequent move continues smoothly from the current state.
       if (pointers.size >= 1) {
         snapshotGesture();
       } else {
@@ -689,21 +591,7 @@
       }
     }
 
-    // Suppress Chrome's drag-image ghost as a belt-and-suspenders against
-    // the pointerdown preventDefault — some Chrome versions still fire
-    // `dragstart` for images even when pointerdown is suppressed.
-    function onDragStart(e) {
-      e.preventDefault();
-    }
-
-    // ── Wheel zoom (centered on cursor) ────────────────────────────────────
-
-    function isFromNav(e) {
-      return e.target && e.target.closest && (
-        e.target.closest(".fresco-nav") ||
-        e.target.closest("[data-fresco-no-capture]")
-      );
-    }
+    function onDragStart(e) { e.preventDefault(); }
 
     function onWheel(e) {
       if (isFromNav(e)) return;
@@ -711,48 +599,30 @@
       var rect = viewportRect();
       var px = e.clientX - rect.left;
       var py = e.clientY - rect.top;
-      // Smooth exponential decay — feels uniform across mouse wheel,
-      // trackpad two-finger scroll (ctrlKey=false), and trackpad pinch
-      // (ctrlKey=true, smaller deltaY). Sign convention: deltaY > 0 means
-      // scroll down → zoom OUT.
       var k = Math.exp(-e.deltaY * 0.0015);
-      setTransitioning(false);
       zoomAt(px, py, k);
     }
 
     function onDblClick(e) {
       if (isFromNav(e)) return;
       var rect = viewportRect();
-      var px = e.clientX - rect.left;
-      var py = e.clientY - rect.top;
-      setTransitioning(false);
-      zoomAt(px, py, 2);
+      zoomAt(e.clientX - rect.left, e.clientY - rect.top, 2);
     }
 
-    // ── Keyboard ───────────────────────────────────────────────────────────
-
     function onKeyDown(e) {
-      // Don't steal keys when the user is typing in a form or contenteditable.
       var t = e.target;
       if (t && t !== el && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
       var handled = true;
-      setTransitioning(false);
       switch (e.key) {
         case "ArrowUp":    panBy(0, 60);  break;
         case "ArrowDown":  panBy(0, -60); break;
         case "ArrowLeft":  panBy(60, 0);  break;
         case "ArrowRight": panBy(-60, 0); break;
-        case "+": case "=":
-          zoomAt(vw / 2, vh / 2, 1.4); break;
-        case "-": case "_":
-          zoomAt(vw / 2, vh / 2, 1 / 1.4); break;
-        case "0":
-          fit(); break;
-        case "f": case "F":
-          toggleFullscreen(); break;
-        default:
-          handled = false;
-          setTransitioning(false);
+        case "+": case "=": zoomAt(vw / 2, vh / 2, 1.4); break;
+        case "-": case "_": zoomAt(vw / 2, vh / 2, 1 / 1.4); break;
+        case "0": fit(); break;
+        case "f": case "F": toggleFullscreen(); break;
+        default: handled = false;
       }
       if (handled) e.preventDefault();
     }
@@ -765,107 +635,7 @@
       }
     }
 
-    // ── Image load + initial fit ───────────────────────────────────────────
-
-    function initEngineFromImg() {
-      iw = img.naturalWidth || img.width || 0;
-      ih = img.naturalHeight || img.height || 0;
-      // Use decode() if available so the bitmap is GPU-uploaded before we
-      // apply the first transform — eliminates "transform on undecoded image"
-      // flash on slow connections. Viewport dimensions are re-read inside
-      // doFit so any layout settling during decode() is captured fresh.
-      var doFit = function() {
-        var rect = viewportRect();
-        vw = rect.width;
-        vh = rect.height;
-        recomputeBounds();
-        fit();
-        ready = true;
-        bus._emit("open", { src: currentSrc, naturalWidth: iw, naturalHeight: ih });
-      };
-      if (typeof img.decode === "function") {
-        img.decode().then(doFit, doFit);
-      } else {
-        doFit();
-      }
-    }
-
-    function onImgLoad() {
-      initEngineFromImg();
-    }
-
-    // ── Source swap ────────────────────────────────────────────────────────
-
-    function setSource(url) {
-      if (!url) return;
-      currentSrc = url;
-      var resolved = resolveTileSource(url);
-      if (resolved.type !== "image") {
-        console.error(
-          "[Fresco] tile-source types other than \"image\" aren't supported in 0.5.x — " +
-          "Tessera integration is planned for a later release."
-        );
-        return;
-      }
-      ready = false;
-      // New <img> load → fit on completion.
-      img.addEventListener("load", onImgLoad, { once: true });
-      img.src = resolved.url;
-    }
-
-    function swapSourcePreservingBounds(url) {
-      if (!url) return;
-      currentSrc = url;
-      var resolved = resolveTileSource(url);
-      if (resolved.type !== "image") {
-        console.error(
-          "[Fresco] tile-source types other than \"image\" aren't supported in 0.5.x — " +
-          "Tessera integration is planned for a later release."
-        );
-        return;
-      }
-      // Preserve (tx, ty, s) on load; recompute sFit/bounds against new dims
-      // but don't refit. If natural dimensions change drastically, this may
-      // crop weirdly — acceptable tradeoff for now (matches OSD's behavior).
-      var prevTx = tx, prevTy = ty, prevS = s;
-      img.addEventListener("load", function once() {
-        img.removeEventListener("load", once);
-        iw = img.naturalWidth || img.width || 0;
-        ih = img.naturalHeight || img.height || 0;
-        recomputeBounds();
-        tx = prevTx; ty = prevTy; s = clamp(prevS, sMin, sMax);
-        clampPan();
-        bus._emit("open", { src: currentSrc, naturalWidth: iw, naturalHeight: ih });
-        requestFrame();
-      }, { once: true });
-      img.src = resolved.url;
-    }
-
-    // ── Viewport resize ────────────────────────────────────────────────────
-
-    var resizeObserver = null;
-    if (typeof ResizeObserver === "function") {
-      resizeObserver = new ResizeObserver(function() {
-        if (!ready) return;
-        var rect = viewportRect();
-        if (rect.width === vw && rect.height === vh) return;
-        vw = rect.width;
-        vh = rect.height;
-        recomputeBounds();
-        // Preserve user's zoom intent on resize: only force-up if s falls
-        // below the new sMin (e.g. viewport grew, fit scale grew). Always
-        // re-clamp pan against the new bounds.
-        if (s < sMin) s = sMin;
-        if (s > sMax) s = sMax;
-        clampPan();
-        bus._emit("resize", { width: vw, height: vh });
-        requestFrame();
-      });
-      resizeObserver.observe(el);
-    }
-
-    // ── Listeners ──────────────────────────────────────────────────────────
-
+    // ── Listeners + nav + resize ───────────────────────────────────────────
     el.addEventListener("pointerdown", onPointerDown);
     el.addEventListener("pointermove", onPointerMove);
     el.addEventListener("pointerup", onPointerUp);
@@ -875,34 +645,37 @@
     el.addEventListener("keydown", onKeyDown);
     el.addEventListener("dragstart", onDragStart);
 
-    // Build the nav overlay (returns the nav element so the handle can attach
-    // extension buttons via `appendNavButton`).
     var navEl = buildNav(el, {
-      onFit: function() { setTransitioning(true); fit(); },
+      onFit: fit,
       onZoomIn: function() {
         var rect = viewportRect();
         vw = rect.width; vh = rect.height;
-        setTransitioning(false);
         zoomAt(vw / 2, vh / 2, 1.4);
       },
       onZoomOut: function() {
         var rect = viewportRect();
         vw = rect.width; vh = rect.height;
-        setTransitioning(false);
         zoomAt(vw / 2, vh / 2, 1 / 1.4);
       },
       onFullscreen: toggleFullscreen
     });
 
-    // Wire image-load. If the server-rendered <img> already finished decoding
-    // by the time we mounted, fire immediately; otherwise wait on `load`.
-    if (img.complete && img.naturalWidth > 0) {
-      initEngineFromImg();
-    } else {
-      img.addEventListener("load", onImgLoad, { once: true });
+    var resizeObserver = null;
+    if (typeof ResizeObserver === "function") {
+      resizeObserver = new ResizeObserver(function() {
+        if (!ready) return;
+        var rect = viewportRect();
+        if (rect.width === vw && rect.height === vh) return;
+        vw = rect.width; vh = rect.height;
+        recomputeBounds();
+        if (s < sMin) s = sMin;
+        if (s > sMax) s = sMax;
+        clampPan();
+        bus._emit("resize", { width: vw, height: vh });
+        requestFrame();
+      });
+      resizeObserver.observe(el);
     }
-
-    // ── Teardown ───────────────────────────────────────────────────────────
 
     function teardown() {
       el.removeEventListener("pointerdown", onPointerDown);
@@ -920,51 +693,162 @@
       if (navEl && navEl.parentNode) navEl.parentNode.removeChild(navEl);
     }
 
-    // ── Controller — internal-facing API used by makeHandle ────────────────
-
     return {
       el: el,
       stage: stage,
-      img: img,
       navEl: navEl,
       bus: bus,
+      fit: fit,
+      zoomAt: zoomAt,
+      panBy: panBy,
+      setTransform: setTransform,
+      refresh: refresh,
+      requestFrame: requestFrame,
       getTransform: function() { return { tx: tx, ty: ty, s: s }; },
       getViewportSize: function() { return { vw: vw, vh: vh }; },
-      getImageSize: function() { return { iw: iw, ih: ih }; },
+      getNaturalSize: function() { return { w: nw, h: nh }; },
       isInfiniteCanvas: function() { return infiniteCanvas; },
-      getCurrentSrc: function() { return currentSrc; },
-      fit: function() { setTransitioning(true); fit(); },
-      zoomAt: function(px, py, k) { setTransitioning(true); zoomAt(px, py, k); },
-      panBy: function(dx, dy) { panBy(dx, dy); },
-      setTransform: setTransform,
-      setSource: setSource,
-      swapSourcePreservingBounds: swapSourcePreservingBounds,
+      isReady: function() { return ready; },
+      setReady: function(b) { ready = b; },
       teardown: teardown
     };
   }
 
   // ===========================================================================
-  // Nav overlay — four buttons (fullscreen, zoom-in, zoom-out, reset). The
-  // host element provides relative positioning (set in CSS), and the nav
-  // attaches as a child so extensions can append more buttons via
-  // `handle.appendNavButton(...)`.
+  // <Fresco.viewer> mount — single image, the simple case. Wraps the engine
+  // with image-load handling and source-swap methods.
   // ===========================================================================
 
-  function buildNav(host, handlers) {
-    injectStyles();
-    var nav = document.createElement("div");
-    nav.className = "fresco-nav";
-    nav.appendChild(makeButton(ICONS.expand, "Toggle fullscreen", handlers.onFullscreen));
-    nav.appendChild(makeButton(ICONS.zoomIn, "Zoom in",  handlers.onZoomIn));
-    nav.appendChild(makeButton(ICONS.zoomOut, "Zoom out", handlers.onZoomOut));
-    nav.appendChild(makeButton(ICONS.reset,  "Reset view", handlers.onFit));
-    host.appendChild(nav);
-    return nav;
+  function mountFrescoViewer(el) {
+    var stage = el.querySelector("[data-fresco-stage]") || el.querySelector(".fresco-stage");
+    var img = stage && stage.querySelector("[data-fresco-img]");
+    if (!stage || !img) {
+      console.warn("[Fresco] mount: missing .fresco-stage or <img> inside", el);
+      return null;
+    }
+
+    // CSS resets like Tailwind preflight set `img { max-width: 100% }` which
+    // shrinks the layout box and breaks the transform math. Override inline
+    // so any later stylesheet rule can't steal it back.
+    el.style.touchAction = "none";
+    img.style.maxWidth = "none";
+    img.style.maxHeight = "none";
+    img.style.width = "auto";
+    img.style.height = "auto";
+
+    var infiniteCanvas = el.dataset.infiniteCanvas === "true";
+    var currentSrc = img.getAttribute("src") || el.dataset.src || "";
+
+    var engine = createTransformEngine({
+      el: el,
+      stage: stage,
+      infiniteCanvas: infiniteCanvas,
+      getNaturalSize: function() {
+        return {
+          w: img.naturalWidth || img.width || 0,
+          h: img.naturalHeight || img.height || 0
+        };
+      },
+      applyChildren: function(s) {
+        var iw = img.naturalWidth || img.width || 0;
+        var ih = img.naturalHeight || img.height || 0;
+        img.style.width = (iw * s) + "px";
+        img.style.height = (ih * s) + "px";
+      }
+    });
+
+    function doFit() {
+      engine.fit();
+      engine.setReady(true);
+      engine.bus._emit("open", {
+        src: currentSrc,
+        naturalWidth: img.naturalWidth,
+        naturalHeight: img.naturalHeight
+      });
+    }
+
+    function initEngineFromImg() {
+      if (typeof img.decode === "function") {
+        img.decode().then(doFit, doFit);
+      } else {
+        doFit();
+      }
+    }
+
+    function onImgLoad() { initEngineFromImg(); }
+
+    function setSource(url) {
+      if (!url) return;
+      currentSrc = url;
+      var resolved = resolveTileSource(url);
+      if (resolved.type !== "image") {
+        console.error(
+          "[Fresco] tile-source types other than \"image\" aren't supported in 0.5.x — " +
+          "Tessera integration is planned for a later release."
+        );
+        return;
+      }
+      engine.setReady(false);
+      img.addEventListener("load", onImgLoad, { once: true });
+      img.src = resolved.url;
+    }
+
+    function swapSourcePreservingBounds(url) {
+      if (!url) return;
+      currentSrc = url;
+      var resolved = resolveTileSource(url);
+      if (resolved.type !== "image") {
+        console.error(
+          "[Fresco] tile-source types other than \"image\" aren't supported in 0.5.x — " +
+          "Tessera integration is planned for a later release."
+        );
+        return;
+      }
+      var t0 = engine.getTransform();
+      img.addEventListener("load", function once() {
+        img.removeEventListener("load", once);
+        engine.refresh();
+        engine.setTransform(t0.tx, t0.ty, t0.s);
+        engine.bus._emit("open", {
+          src: currentSrc,
+          naturalWidth: img.naturalWidth,
+          naturalHeight: img.naturalHeight
+        });
+      }, { once: true });
+      img.src = resolved.url;
+    }
+
+    if (img.complete && img.naturalWidth > 0) {
+      initEngineFromImg();
+    } else {
+      img.addEventListener("load", onImgLoad, { once: true });
+    }
+
+    return {
+      el: el,
+      stage: stage,
+      img: img,
+      navEl: engine.navEl,
+      bus: engine.bus,
+      getTransform: engine.getTransform,
+      getViewportSize: engine.getViewportSize,
+      getImageSize: function() {
+        return { iw: img.naturalWidth || 0, ih: img.naturalHeight || 0 };
+      },
+      isInfiniteCanvas: engine.isInfiniteCanvas,
+      getCurrentSrc: function() { return currentSrc; },
+      fit: engine.fit,
+      zoomAt: engine.zoomAt,
+      panBy: engine.panBy,
+      setTransform: engine.setTransform,
+      setSource: setSource,
+      swapSourcePreservingBounds: swapSourcePreservingBounds,
+      teardown: engine.teardown
+    };
   }
 
   // ===========================================================================
-  // Viewer handle — the public surface exposed to extensions through
-  // `window.Fresco.viewerFor(id)`.
+  // Viewer handle — public surface via window.Fresco.viewerFor(id).
   // ===========================================================================
 
   function makeViewerHandle(controller) {
@@ -972,9 +856,6 @@
     var el = controller.el;
 
     function imageToScreen(pt) {
-      // Image-pixel coords → page-pixel coords (matches 0.4.x convention so
-      // overlay code that read OSD's viewportToWindowCoordinates keeps working
-      // with minimal change).
       var t = controller.getTransform();
       var rect = el.getBoundingClientRect();
       return {
@@ -993,11 +874,6 @@
     }
 
     function getViewportBounds() {
-      // Image-pixel rect currently visible. Semantics: a rect whose top-left
-      // is the image-coord at the viewport's top-left, sized to viewport in
-      // image pixels. NOTE: 0.4.x returned OSD's normalized 0–1 viewport rect;
-      // 0.5.x returns image-pixel coords directly — easier to use, but a
-      // breaking change. See CHANGELOG.
       var t = controller.getTransform();
       var v = controller.getViewportSize();
       return {
@@ -1008,10 +884,7 @@
       };
     }
 
-    function fitBounds(rect /* , immediately */) {
-      // Solve for (s, tx, ty) such that the given image-pixel rect fills the
-      // viewport, centered. `immediately` is accepted for API compatibility
-      // but ignored — 0.5.x has no animation system.
+    function fitBounds(rect) {
       if (!rect || rect.width <= 0 || rect.height <= 0) return;
       var v = controller.getViewportSize();
       var newS = Math.min(v.vw / rect.width, v.vh / rect.height);
@@ -1022,19 +895,14 @@
 
     return {
       container: el,
-
       imageToScreen: imageToScreen,
       screenToImage: screenToImage,
       getViewportBounds: getViewportBounds,
       fitBounds: fitBounds,
       setSource: function(url) { controller.setSource(url); },
-      swapSourcePreservingBounds: function(url) {
-        controller.swapSourcePreservingBounds(url);
-      },
-
+      swapSourcePreservingBounds: function(url) { controller.swapSourcePreservingBounds(url); },
       on: bus.on,
       _emit: bus._emit,
-
       appendNavButton: function(svg, title, onClick) {
         return attachNavButton(controller.navEl, svg, title, onClick);
       }
@@ -1063,6 +931,289 @@
       var next = this.el.dataset.src;
       if (next && next !== this.controller.getCurrentSrc()) {
         this.controller.swapSourcePreservingBounds(next);
+      }
+    },
+
+    destroyed: function() {
+      if (this.el && this.el.id) unpublish(this.el.id);
+      if (this.controller) {
+        try { this.controller.teardown(); } catch (_) {}
+        this.controller = null;
+      }
+      this.handle = null;
+    }
+  };
+
+  // ===========================================================================
+  // <Fresco.canvas> mount — N images laid out at canvas-pixel coords.
+  //
+  // The host carries data-canvas-width/-height. The stage holds N <img>
+  // children with data-canvas-x/-y/-width (and optional data-canvas-height,
+  // data-image-id, data-z-index). The engine's applyChildren(s) walks the
+  // imgs every frame and rewrites each one's left/top/width/height.
+  // Single-image is just N=1.
+  //
+  // The canvas handle adds: getCanvasSize, getImages, imageBoundsFor,
+  // fitImage, getExtension (read-only; extensions write through LiveView).
+  // Coordinates operate in canvas-pixel space — same coord system the
+  // .fresco file uses, so annotation payloads compose uniformly.
+  // ===========================================================================
+
+  function mountFrescoCanvas(el) {
+    var stage = el.querySelector("[data-fresco-stage]") || el.querySelector(".fresco-stage");
+    if (!stage) {
+      console.warn("[Fresco] canvas mount: missing .fresco-stage", el);
+      return null;
+    }
+
+    el.style.touchAction = "none";
+
+    var canvasW = parseFloat(el.dataset.canvasWidth) || 0;
+    var canvasH = parseFloat(el.dataset.canvasHeight) || 0;
+    var infiniteCanvas = el.dataset.infiniteCanvas === "true";
+
+    var imgs = Array.from(stage.querySelectorAll("[data-fresco-canvas-img]"));
+    function applyImgResets(im) {
+      im.style.maxWidth = "none";
+      im.style.maxHeight = "none";
+    }
+    imgs.forEach(applyImgResets);
+
+    function imgRect(im) {
+      var x = parseFloat(im.dataset.canvasX) || 0;
+      var y = parseFloat(im.dataset.canvasY) || 0;
+      var w = parseFloat(im.dataset.canvasWidth) || 0;
+      var dh = parseFloat(im.dataset.canvasHeight);
+      var h;
+      if (dh > 0) {
+        h = dh;
+      } else if (im.naturalWidth > 0 && im.naturalHeight > 0 && w > 0) {
+        h = w * (im.naturalHeight / im.naturalWidth);
+      } else {
+        h = 0;
+      }
+      return { x: x, y: y, width: w, height: h };
+    }
+
+    var engine = createTransformEngine({
+      el: el,
+      stage: stage,
+      infiniteCanvas: infiniteCanvas,
+      getNaturalSize: function() { return { w: canvasW, h: canvasH }; },
+      applyChildren: function(s) {
+        for (var i = 0; i < imgs.length; i++) {
+          var im = imgs[i];
+          var r = imgRect(im);
+          im.style.left = (r.x * s) + "px";
+          im.style.top = (r.y * s) + "px";
+          im.style.width = (r.width * s) + "px";
+          if (r.height > 0) {
+            im.style.height = (r.height * s) + "px";
+          }
+        }
+      }
+    });
+
+    // Hydrate from server-rendered HTML and run initial fit. Canvas dims are
+    // known immediately — no need to wait for image loads. Per-image natural
+    // dims arrive later via load events; we requestFrame on each load so
+    // heights derived from natural aspect ratio settle in cleanly.
+    function initialFit() {
+      engine.fit();
+      engine.setReady(true);
+      engine.bus._emit("open", {
+        canvasWidth: canvasW,
+        canvasHeight: canvasH,
+        imageCount: imgs.length
+      });
+    }
+    initialFit();
+
+    function onImgLoad(e) {
+      var im = e.target;
+      engine.bus._emit("image-loaded", {
+        imageId: im.dataset.imageId,
+        naturalWidth: im.naturalWidth,
+        naturalHeight: im.naturalHeight
+      });
+      engine.requestFrame();
+    }
+    imgs.forEach(function(im) {
+      if (!im.complete) im.addEventListener("load", onImgLoad);
+      else if (im.naturalWidth > 0) {
+        engine.bus._emit("image-loaded", {
+          imageId: im.dataset.imageId,
+          naturalWidth: im.naturalWidth,
+          naturalHeight: im.naturalHeight
+        });
+      }
+    });
+
+    // Re-read canvas dims and images list — called from the hook's `updated`
+    // callback when the server-rendered layout changes.
+    function refreshLayout() {
+      canvasW = parseFloat(el.dataset.canvasWidth) || 0;
+      canvasH = parseFloat(el.dataset.canvasHeight) || 0;
+      imgs = Array.from(stage.querySelectorAll("[data-fresco-canvas-img]"));
+      imgs.forEach(applyImgResets);
+      imgs.forEach(function(im) {
+        if (!im.complete) im.addEventListener("load", onImgLoad);
+      });
+      engine.refresh();
+      engine.requestFrame();
+    }
+
+    function imageBoundsFor(id) {
+      for (var i = 0; i < imgs.length; i++) {
+        if (imgs[i].dataset.imageId === id) return imgRect(imgs[i]);
+      }
+      return null;
+    }
+
+    function getImages() {
+      return imgs.map(function(im) {
+        var r = imgRect(im);
+        return {
+          id: im.dataset.imageId || null,
+          x: r.x, y: r.y, width: r.width, height: r.height,
+          z_index: parseInt(im.dataset.zIndex || im.style.zIndex || "0", 10),
+          naturalWidth: im.naturalWidth || 0,
+          naturalHeight: im.naturalHeight || 0,
+          src: im.getAttribute("src") || ""
+        };
+      });
+    }
+
+    function getExtension(name) {
+      var raw = el.dataset.extensions;
+      if (!raw) return undefined;
+      try {
+        var parsed = JSON.parse(raw);
+        return parsed && parsed[name];
+      } catch (_) { return undefined; }
+    }
+
+    return {
+      el: el,
+      stage: stage,
+      imgs: imgs,
+      navEl: engine.navEl,
+      bus: engine.bus,
+      getTransform: engine.getTransform,
+      getViewportSize: engine.getViewportSize,
+      isInfiniteCanvas: engine.isInfiniteCanvas,
+      getCanvasSize: function() { return { width: canvasW, height: canvasH }; },
+      getImages: getImages,
+      imageBoundsFor: imageBoundsFor,
+      getExtension: getExtension,
+      fit: engine.fit,
+      zoomAt: engine.zoomAt,
+      panBy: engine.panBy,
+      setTransform: engine.setTransform,
+      refreshLayout: refreshLayout,
+      teardown: engine.teardown
+    };
+  }
+
+  // ===========================================================================
+  // Canvas handle — public surface via window.Fresco.viewerFor(id) /
+  // window.Fresco.onReady(id, cb).
+  // ===========================================================================
+
+  function makeCanvasHandle(controller) {
+    var bus = controller.bus;
+    var el = controller.el;
+
+    function imageToScreen(pt) {
+      var t = controller.getTransform();
+      var rect = el.getBoundingClientRect();
+      return {
+        x: (pt.x || 0) * t.s + t.tx + rect.left,
+        y: (pt.y || 0) * t.s + t.ty + rect.top
+      };
+    }
+
+    function screenToImage(pt) {
+      var t = controller.getTransform();
+      var rect = el.getBoundingClientRect();
+      return {
+        x: ((pt.x || 0) - rect.left - t.tx) / t.s,
+        y: ((pt.y || 0) - rect.top - t.ty) / t.s
+      };
+    }
+
+    function getViewportBounds() {
+      var t = controller.getTransform();
+      var v = controller.getViewportSize();
+      return {
+        x: -t.tx / t.s,
+        y: -t.ty / t.s,
+        width: v.vw / t.s,
+        height: v.vh / t.s
+      };
+    }
+
+    function fitBounds(rect) {
+      if (!rect || rect.width <= 0 || rect.height <= 0) return;
+      var v = controller.getViewportSize();
+      var newS = Math.min(v.vw / rect.width, v.vh / rect.height);
+      var newTx = (v.vw - newS * rect.width) / 2 - newS * rect.x;
+      var newTy = (v.vh - newS * rect.height) / 2 - newS * rect.y;
+      controller.setTransform(newTx, newTy, newS);
+    }
+
+    function fitImage(id) {
+      var bounds = controller.imageBoundsFor(id);
+      if (bounds) fitBounds(bounds);
+    }
+
+    return {
+      container: el,
+      imageToScreen: imageToScreen,
+      screenToImage: screenToImage,
+      getViewportBounds: getViewportBounds,
+      fitBounds: fitBounds,
+      getCanvasSize: controller.getCanvasSize,
+      getImages: controller.getImages,
+      imageBoundsFor: controller.imageBoundsFor,
+      fitImage: fitImage,
+      getExtension: controller.getExtension,
+      on: bus.on,
+      _emit: bus._emit,
+      appendNavButton: function(svg, title, onClick) {
+        return attachNavButton(controller.navEl, svg, title, onClick);
+      }
+    };
+  }
+
+  // ===========================================================================
+  // FrescoCanvas LiveView hook
+  // ===========================================================================
+
+  window.FrescoHooks.FrescoCanvas = {
+    mounted: function() {
+      injectStyles();
+      var controller = mountFrescoCanvas(this.el);
+      if (!controller) return;
+      this.controller = controller;
+      var handle = makeCanvasHandle(controller);
+      this.handle = handle;
+      // Initialize layout rev so `updated` can fast-path extension-only churn.
+      this._layoutRev = this.el.dataset.canvasWidth + "x" + this.el.dataset.canvasHeight + ":" +
+                        this.el.querySelectorAll("[data-fresco-canvas-img]").length;
+      publishReady(this.el.id, handle);
+    },
+
+    updated: function() {
+      if (!this.controller) return;
+      // Fast-path: skip DOM work when only `data-extensions` changed (Etcher
+      // will churn this on every annotation edit). Re-layout only when canvas
+      // dims or image count actually changed.
+      var nextLayoutRev = this.el.dataset.canvasWidth + "x" + this.el.dataset.canvasHeight + ":" +
+                         this.el.querySelectorAll("[data-fresco-canvas-img]").length;
+      if (nextLayoutRev !== this._layoutRev) {
+        this._layoutRev = nextLayoutRev;
+        this.controller.refreshLayout();
       }
     },
 
@@ -1231,7 +1382,6 @@
       var container = self.el;
       if (!container) return;
 
-      // The component server-rendered the data-sources payload as JSON.
       var sourcesJson = container.dataset.sources;
       var sources;
       try {

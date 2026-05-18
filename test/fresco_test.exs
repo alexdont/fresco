@@ -85,6 +85,160 @@ defmodule FrescoTest do
     end
   end
 
+  describe "Fresco.canvas/1" do
+    defp build_canvas(opts \\ []) do
+      width = Keyword.get(opts, :width, 4000)
+      height = Keyword.get(opts, :height, 3000)
+      images = Keyword.get(opts, :images, [])
+      background = Keyword.get(opts, :background)
+      extensions = Keyword.get(opts, :extensions, %{})
+
+      canvas = Fresco.Canvas.new(width: width, height: height, background: background)
+
+      canvas =
+        Enum.reduce(images, canvas, fn img, acc -> Fresco.Canvas.add_image(acc, img) end)
+
+      Enum.reduce(extensions, canvas, fn {k, v}, acc ->
+        Fresco.Canvas.put_extension(acc, k, v)
+      end)
+    end
+
+    test "renders the host with the FrescoCanvas hook and canvas data attrs" do
+      canvas =
+        build_canvas(
+          width: 4000,
+          height: 3000,
+          images: [%{src: "/a.jpg", x: 0, y: 0, width: 2000}]
+        )
+
+      html = render_component(&Fresco.canvas/1, id: "board", canvas: canvas)
+
+      assert html =~ ~s(id="board")
+      assert html =~ ~s(phx-hook="FrescoCanvas")
+      assert html =~ ~s(data-canvas-width="4000")
+      assert html =~ ~s(data-canvas-height="3000")
+      assert html =~ ~s(tabindex="0")
+      assert html =~ ~s(class="fresco-viewer w-full h-96")
+    end
+
+    test "renders one <img> per image with the canvas-pixel data attrs" do
+      canvas =
+        build_canvas(
+          images: [
+            %{src: "/a.jpg", x: 0, y: 0, width: 2000},
+            %{src: "/b.jpg", x: 2100, y: 0, width: 1800}
+          ]
+        )
+
+      html = render_component(&Fresco.canvas/1, id: "board", canvas: canvas)
+
+      assert html =~ ~s(src="/a.jpg")
+      assert html =~ ~s(src="/b.jpg")
+      assert html =~ ~s(data-fresco-canvas-img)
+      assert html =~ ~s(data-image-id="img-1")
+      assert html =~ ~s(data-image-id="img-2")
+      assert html =~ ~s(data-canvas-x="0")
+      assert html =~ ~s(data-canvas-x="2100")
+      assert html =~ ~s(data-canvas-width="2000")
+      assert html =~ ~s(data-canvas-width="1800")
+    end
+
+    test "renders the .fresco-stage div inside the host" do
+      canvas = build_canvas(images: [%{src: "/a.jpg", x: 0, y: 0, width: 100}])
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas)
+      assert html =~ ~s(class="fresco-stage")
+      assert html =~ "data-fresco-stage"
+    end
+
+    test "empty images list renders an empty stage (no crash, no imgs)" do
+      canvas = build_canvas(images: [])
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas)
+      assert html =~ "fresco-stage"
+      refute html =~ "data-fresco-canvas-img"
+    end
+
+    test "nil :canvas raises (Phoenix.Component enforces the struct attr type)" do
+      assert_raise FunctionClauseError, fn ->
+        render_component(&Fresco.canvas/1, id: "b", canvas: nil)
+      end
+    end
+
+    test "natural_width + natural_height set inline height to preserve aspect pre-mount" do
+      canvas =
+        build_canvas(
+          images: [
+            %{src: "/a.jpg", x: 0, y: 0, width: 1000, natural_width: 2000, natural_height: 1500}
+          ]
+        )
+
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas)
+      # 1000 * 1500 / 2000 = 750
+      assert html =~ ~s(data-canvas-height="750.0")
+      assert html =~ "height:750.0px;"
+    end
+
+    test "z_index plumbs through and sorts render order" do
+      # Two imgs with explicit z_index — the second one should come first in
+      # render order (sorted ascending by z_index).
+      canvas =
+        build_canvas(
+          images: [
+            %{src: "/top.jpg", x: 0, y: 0, width: 100, z_index: 10},
+            %{src: "/bottom.jpg", x: 0, y: 0, width: 100, z_index: 0}
+          ]
+        )
+
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas)
+      assert html =~ "z-index:10;"
+      assert html =~ "z-index:0;"
+
+      bottom_idx = :binary.match(html, "/bottom.jpg") |> elem(0)
+      top_idx = :binary.match(html, "/top.jpg") |> elem(0)
+      assert bottom_idx < top_idx, "lower z_index should render first in DOM order"
+    end
+
+    test "canvas.background sets inline background-color on the stage" do
+      canvas = build_canvas(background: "#fafafa")
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas)
+      assert html =~ ~s|style="background-color: #fafafa;"|
+    end
+
+    test "extensions are JSON-encoded onto data-extensions for the JS hook" do
+      canvas = build_canvas(extensions: [{"etcher", %{"annotations" => []}}])
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas)
+      assert html =~ ~s(data-extensions=)
+      assert html =~ ~s(etcher)
+    end
+
+    test "infinite_canvas adds the modifier class on the host" do
+      canvas = build_canvas()
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas, infinite_canvas: true)
+      assert html =~ "fresco-viewer--infinite"
+      assert html =~ ~s(data-infinite-canvas="true")
+    end
+
+    test "theme :system is the default" do
+      canvas = build_canvas()
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas)
+      assert html =~ ~s(data-fresco-theme="system")
+    end
+
+    test "theme overrides plumb through" do
+      canvas = build_canvas()
+
+      for theme <- [:light, :dark, :inherit] do
+        html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas, theme: theme)
+        assert html =~ ~s(data-fresco-theme="#{theme}")
+      end
+    end
+
+    test "passes :rest global attrs through to the host" do
+      canvas = build_canvas()
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas, "data-extra": "yes")
+      assert html =~ ~s(data-extra="yes")
+    end
+  end
+
   describe "Fresco.scroll_strip/1" do
     @one_src [%{url: "/img/p1.jpg", width: 720, height: 9000}]
 

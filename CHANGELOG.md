@@ -4,6 +4,91 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.1 — <today's date>
+
+New component: **`<Fresco.canvas>`** — a layered scene of N images
+positioned at absolute canvas-pixel coordinates, plus an open
+`extensions` map for annotation tools (future Etcher), ML overlays, and
+other peer packages. Serializes to a single `.fresco` JSON file so an
+entire scene lives in one place instead of scattered DB tables.
+Single-image is just the N=1 case.
+
+The pan/zoom engine is shared with `<Fresco.viewer>` — same gestures,
+same smoothness, same `infinite_canvas`/`theme` semantics.
+
+### Added
+
+- **`Fresco.Canvas` Elixir module** — `defstruct` (`version`, `canvas`,
+  `images`, `extensions`, `__extra__`), builders (`new/1`, `add_image/2`,
+  `put_extension/3`), JSON I/O (`to_json/1`, `to_json!/1`, `from_json/1`,
+  `from_json!/1`), atomic file I/O (`write/2`, `write!/2`, `read/1`,
+  `read!/1`). Atomic writes go through `<path>.tmp` then rename, so an
+  interrupted save can't corrupt the existing file.
+- **`Fresco.Canvas.SchemaError`** — structured exception with `:path`
+  (list of atoms/indices pointing at the offending field) and `:reason`
+  (matchable term, e.g. `{:expected_positive_number, -3}`,
+  `{:duplicate_id, "img-1"}`).
+- **`<Fresco.canvas>` Phoenix.Component** — attrs: `:id` (required),
+  `:canvas` (required `%Fresco.Canvas{}` struct), `:class`,
+  `:infinite_canvas`, `:theme`, `:rest`. Renders host > stage > N
+  positioned `<img>` tags. Each img carries `data-canvas-x/-y/-width`
+  and optionally `-height` / `-z-index` so the JS engine can re-layout
+  per frame.
+- **New JS hook `FrescoCanvas`** in `priv/static/fresco.js`. Reuses every
+  shared helper (`createEventBus`, `attachNavButton`, `injectStyles`,
+  `ICONS`, `buildNav`, registry) and the new internal
+  `createTransformEngine` (extracted from `mountFrescoViewer`'s
+  internals — the viewer's pan/zoom code path is unchanged in behavior).
+  Adds `mountFrescoCanvas` for N-image layout and `makeCanvasHandle` for
+  the extended handle surface.
+- **Canvas handle additions** beyond the viewer handle:
+  `getCanvasSize()`, `getImages()`, `imageBoundsFor(id)`, `fitImage(id)`,
+  `getExtension(name)`. `imageToScreen` / `screenToImage` operate in
+  **canvas-pixel coords** — the same coord system the `.fresco` file
+  uses, so annotation payloads compose uniformly.
+- **`.fresco` file format (v1)** — see `Fresco.Canvas` moduledoc.
+  Forward-compat is built in: unknown top-level and per-image keys are
+  preserved via a private `__extra__` map and re-merged on `to_json`,
+  so a v1 reader of a future v2 file round-trips v2 fields verbatim.
+  Same rule applies inside `extensions.*` blobs (opaque to Fresco).
+- **Three-way component facade** — `Fresco.canvas/1` joins `viewer/1`
+  and `scroll_strip/1` as a `defdelegate` on the `Fresco` module.
+
+### Internal refactor (no behavior change)
+
+- **`createTransformEngine({el, stage, getNaturalSize, applyChildren,
+  infiniteCanvas})`** — shared pan/zoom/clamp/gesture pipeline extracted
+  from `mountFrescoViewer`. The viewer now passes
+  `getNaturalSize = () => ({w: img.naturalWidth, h: img.naturalHeight})`
+  and `applyChildren = (s) => { img.style.width = (iw*s)+"px"; ... }`;
+  the canvas passes `getNaturalSize = () => ({w: canvas-width, h:
+  canvas-height})` and `applyChildren = (s) => { for each img: ... }`.
+  All existing viewer tests pass unchanged.
+
+### Extension contract — passive Fresco
+
+Fresco is passive with respect to `extensions`. Updates flow consumer
+LiveView → `%Fresco.Canvas{}` in assigns → re-render. A peer package
+like the future Etcher reads its initial state via
+`handle.getExtension("etcher")` at mount, pushes annotation edits to its
+own LiveView, which calls `Fresco.Canvas.put_extension(canvas, "etcher",
+new_data)` and re-assigns. Fresco's handle is intentionally read-only
+for extensions — no `setExtension` method exists, so save timing never
+races with annotation updates across channels. The `.fresco` file is
+the single source of truth.
+
+### Notes
+
+- Etcher integration ships in a separate package release; Fresco 0.5.1
+  doesn't depend on it. The new `getExtension` / `imageBoundsFor` /
+  `getImages` handle methods are the API Etcher will consume.
+- Memory windowing for very large multi-image canvases (>10 images) is
+  deferred until a real call site needs it. The strip's evict/restore
+  trick doesn't map cleanly because canvas images can be anywhere; a
+  viewport-overlap heuristic will be added when needed.
+- `<Fresco.viewer>` is unchanged. Use the simpler component when you
+  just want pan/zoom over one image without a scene-document overhead.
+
 ## 0.5.0 — <today's date>
 
 Full rewrite of `<Fresco.viewer>`. **OpenSeadragon is gone.** The viewer is

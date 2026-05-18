@@ -45,28 +45,37 @@ defmodule Fresco do
         function(url) { return { type: "image", url: rewrite(url) }; }
       );
 
-  See `Fresco.Viewer` for the component reference, and `Fresco.ScrollStrip`
-  for the long-scroll reader counterpart (`<Fresco.scroll_strip>`).
+  See `Fresco.Viewer`, `Fresco.Canvas`, and `Fresco.ScrollStrip` for the
+  per-component references.
 
-  ## Two component shapes
+  ## Three component shapes
 
   - **`<Fresco.viewer>`** — pan/zoom for a single image. Hand-rolled
     CSS-transform engine; native Pointer Events; smooth on iOS Safari.
     Use when the user is panning *around* a single image and may want to
     zoom in.
+  - **`<Fresco.canvas>`** — N images laid out at absolute canvas-pixel
+    coordinates on a virtual canvas, plus an open `extensions` map for
+    annotation tools / overlays. Serializes to a single `.fresco` JSON
+    file so an entire scene lives in one place instead of scattered DB
+    tables. Single-image is just the N=1 case. Use when the user is
+    building a layered scene they'll save.
   - **`<Fresco.scroll_strip>`** — native DOM `<img>` + browser scroll for
     long-form vertical strips (manhwa, comics, IG feeds). Use when the
     user is reading by scrolling *through* a stack of images at one zoom
     level.
 
-  Both share the registry — `window.Fresco.onReady(domId, callback)` works
-  for either, and the handle each yields exposes a partly-shared surface
-  (`container`, `on`, `appendNavButton`) plus its own kind-specific
-  methods (viewer: `imageToScreen` / `fitBounds`; strip: `scrollTo` /
-  `scrollBy` / `getScrollState`). Feature-detect with
-  `"scrollTo" in handle` to dispatch between them.
+  All three share the registry — `window.Fresco.onReady(domId, callback)`
+  works for any of them, and the handle each yields exposes a
+  partly-shared surface (`container`, `on`, `appendNavButton`) plus its
+  own kind-specific methods (viewer: `imageToScreen` / `fitBounds`;
+  canvas: same plus `getImages` / `imageBoundsFor` / `fitImage` /
+  `getExtension`; strip: `scrollTo` / `scrollBy` / `getScrollState`).
+  Feature-detect with `"scrollTo" in handle` (strip),
+  `"getImages" in handle` (canvas), or assume viewer otherwise.
   """
 
   defdelegate viewer(assigns), to: Fresco.Viewer
+  defdelegate canvas(assigns), to: Fresco.Canvas
   defdelegate scroll_strip(assigns), to: Fresco.ScrollStrip
 end
