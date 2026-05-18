@@ -1,41 +1,44 @@
 // Fresco — polished pan-zoom image viewer for Phoenix apps.
 //
-// Wraps OpenSeadragon (lazy-loaded from jsDelivr) with a Phoenix LiveView
-// hook, a Heroicons nav overlay, viewport clamping, and a small but
-// deliberate extension surface so layered libraries (Tessera for deep zoom,
-// future annotation packages, etc.) can plug in without forking.
+// Hand-rolled CSS-transform pan/zoom engine. Zero external JS deps; no
+// canvas, no tile pyramids, no spring math, no CDN load. The single <img>
+// lives inside a stage div; `transform: translate3d(tx, ty, 0) scale(s)`
+// on the stage handles all motion. Native Pointer Events drive gestures;
+// native Fullscreen API handles fullscreen. The whole engine is small
+// enough that consumers can audit every line.
 //
-// Public surface:
+// Public surface (unchanged from 0.4.x where compatible):
 //
 //   window.Fresco.viewerFor(domId)             // → viewer handle, or null
 //   window.Fresco.onViewerReady(domId, cb)     // fires once when ready
+//   window.Fresco.onReady(domId, cb)           // alias of onViewerReady
 //   window.Fresco.registerSourceProvider(predicate, factory)
 //
 // Viewer handle (returned by viewerFor):
 //
-//   { openSeadragon, container,
+//   { container,
 //     imageToScreen(pt), screenToImage(pt),
 //     getViewportBounds(),
 //     fitBounds(rect, immediately),
-//     setSource(url, opts), swapSourcePreservingBounds(url, opts),
+//     setSource(url), swapSourcePreservingBounds(url),
 //     on(eventName, handler) → unsubscribe,
 //     appendNavButton(svg, title, onClick) → unsubscribe (+ .setIcon/.setTitle/.el) }
 //
-// `handle.openSeadragon` is an escape hatch — the underlying OSD Viewer
-// instance. Use it when Fresco doesn't expose the OSD API you need (custom
-// constraints, raw event handlers, plugin registration). See the
-// "Advanced: OSD escape hatch" section in README.md for the contract.
-// `handle.viewer` is a back-compat alias for `openSeadragon` (it was the
-// original name through 0.1.x); new code should prefer `openSeadragon`.
-//
 // Events fired through `handle.on(eventName, fn)`:
-//   "zoom" / "pan" / "open" / "resize"           — bridged from OSD intent
-//   "animation" / "update-viewport"              — per-frame OSD ticks
-//   "fast-pan"                                   — synthetic; only when
-//     the consumer opted into `:pan_optimized`. Three phases via
-//     `e.phase`: "start" (overlay should add will-change: transform),
-//     "delta" (apply `translate3d(e.x, e.y, 0)` to overlay container),
-//     "end" (clear the transform; OSD's viewport is now committed).
+//   "zoom" / "pan" / "open" / "resize"           — fired on intent (gesture start, source open, viewport resize)
+//   "animation" / "update-viewport"              — fired per-frame, whenever the transform is rewritten
+//
+// Notes vs. 0.4.x:
+//   - `handle.openSeadragon` / `handle.viewer` are gone. The engine is no
+//     longer OSD-backed; there's no underlying instance to escape to.
+//   - `getViewportBounds()` returns image-pixel coords `{x, y, width, height}`,
+//     not OSD-normalized 0–1 rects.
+//   - `fitBounds(..., immediately)` ignores `immediately` — the lite engine
+//     has no animation system in 0.5.x.
+//   - The `fast-pan` event is gone (no canvas redraw to coordinate around).
+//     Overlays attached as children of `.fresco-stage` get the transform
+//     for free; overlays driven by `on("zoom"|"pan"|"animation")` continue
+//     to work.
 //
 // Parent app wiring:
 //   import "../../deps/fresco/priv/static/fresco.js"
@@ -46,39 +49,12 @@
   window.FrescoLoaded = true;
 
   // ===========================================================================
-  // Lazy OSD load
-  // ===========================================================================
-
-  // OpenSeadragon — pinned to a known-good 4.1.x. Bump this version
-  // string intentionally after validating against the new release;
-  // the URL is a CDN, so a silent upstream change shouldn't surprise
-  // viewers in the wild.
-  var OSD_VERSION = "4.1.0";
-  var OSD_CDN = "https://cdn.jsdelivr.net/npm/openseadragon@" + OSD_VERSION +
-                "/build/openseadragon/openseadragon.min.js";
-  var osdLoading = false;
-  var osdLoadCallbacks = [];
-
-  function loadOSD(callback) {
-    if (window.OpenSeadragon) { callback(); return; }
-    osdLoadCallbacks.push(callback);
-    if (osdLoading) return;
-    osdLoading = true;
-
-    var script = document.createElement("script");
-    script.src = OSD_CDN;
-    script.onload = function() {
-      osdLoadCallbacks.forEach(function(cb) { cb(); });
-      osdLoadCallbacks = [];
-    };
-    script.onerror = function() {
-      console.error("[Fresco] Failed to load OpenSeadragon from CDN");
-    };
-    document.head.appendChild(script);
-  }
-
-  // ===========================================================================
-  // Extension surface
+  // Extension surface — same shape as 0.4.x so consumers (Tessera, future
+  // Etcher) attach the same way. The default `{type: "image", url}` provider
+  // matches plain image URLs; Tessera-lite will register a `{type: "tiles", …}`
+  // factory when it lands. The viewer engine dispatches on `resolved.type`
+  // — it currently only knows "image" and throws a clear error for anything
+  // else so future tile-source integration fails loudly rather than silently.
   // ===========================================================================
 
   var viewerRegistry = {};        // domId → viewer handle
@@ -100,46 +76,13 @@
     return { type: "image", url: url };
   }
 
-  // Build OSD's "positioned source" wrapper from a single :sources
-  // entry. Each entry's `src` flows through the provider chain so
-  // mixed-format layouts (plain image + DZI pyramid) work transparently.
-  // Defaults match the Elixir attr docs: x=0, y=0, width=1 in viewport
-  // units, with the first image conventionally anchoring the
-  // coordinate system at width=1.
-  function buildMultiSource(entry) {
-    return {
-      tileSource: resolveTileSource(entry.src),
-      x: typeof entry.x === "number" ? entry.x : 0,
-      y: typeof entry.y === "number" ? entry.y : 0,
-      width: typeof entry.width === "number" ? entry.width : 1
-    };
-  }
-
-  // Parse a JSON-encoded :sources payload into an OSD tileSources array.
-  // Returns null if the payload is empty or malformed (JS falls back
-  // to data-src in that case).
-  function parseSourcesJson(json) {
-    if (!json) return null;
-    try {
-      var parsed = JSON.parse(json);
-      if (!Array.isArray(parsed) || parsed.length === 0) return null;
-      return parsed.map(buildMultiSource);
-    } catch (e) {
-      console.warn("[Fresco] Malformed data-sources JSON", e);
-      return null;
-    }
-  }
-
   window.Fresco = {
     viewerFor: function(domId) {
       return viewerRegistry[domId] || null;
     },
 
-    // Identical lookup keyed by dom id; named separately so consumer code
-    // self-documents which host shape it expects. `viewerFor` returns a
-    // viewer-shaped handle, `scrollStripFor` returns a strip-shaped handle.
-    // Same underlying registry — `onViewerReady` (and its `onReady` alias)
-    // works for either.
+    // Same lookup as viewerFor; named separately so consumer code self-documents
+    // which host shape it expects. Both share the registry.
     scrollStripFor: function(domId) {
       return viewerRegistry[domId] || null;
     },
@@ -151,9 +94,8 @@
       readyCallbacks[domId].push(callback);
     },
 
-    // Alias for onViewerReady. The strip handle isn't a "viewer"
-    // colloquially — callers reading scrollStrip code will find onReady
-    // more natural. Both names share the same registry/queue.
+    // Alias for onViewerReady. The strip handle isn't a "viewer" colloquially —
+    // callers reading scrollStrip code find onReady more natural.
     onReady: function(domId, callback) {
       return window.Fresco.onViewerReady(domId, callback);
     },
@@ -162,7 +104,6 @@
     // before the default provider; first match wins. Providers added later
     // take precedence over the default (which always matches).
     registerSourceProvider: function(predicate, factory) {
-      // Insert at the front so it beats the default catch-all.
       sourceProviders.unshift({ predicate: predicate, factory: factory });
     }
   };
@@ -186,9 +127,14 @@
     zoomIn:  '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607ZM10.5 7.5v6m3-3h-6"/></svg>',
     zoomOut: '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607ZM13.5 10.5h-6"/></svg>',
     reset:   '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>',
-    expand:  '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15"/></svg>',
-    rotate:  '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 12c0-1.232-.046-2.453-.138-3.662a4.006 4.006 0 0 0-3.7-3.7 48.678 48.678 0 0 0-7.324 0 4.006 4.006 0 0 0-3.7 3.7c-.017.22-.032.441-.046.662M19.5 12l3-3m-3 3-3-3m-12 3c0 1.232.046 2.453.138 3.662a4.006 4.006 0 0 0 3.7 3.7 48.656 48.656 0 0 0 7.324 0 4.006 4.006 0 0 0 3.7-3.7c.017-.22.032-.441.046-.662M4.5 12l3 3m-3-3-3 3"/></svg>'
+    expand:  '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15"/></svg>'
   };
+
+  // ===========================================================================
+  // Styles — one stylesheet for both viewer and strip. The six --fresco-*
+  // custom properties are the entire palette surface (system / light / dark /
+  // inherit branches below). Structural rules apply regardless of theme.
+  // ===========================================================================
 
   var stylesInjected = false;
   function injectStyles() {
@@ -196,6 +142,7 @@
     stylesInjected = true;
 
     var css = [
+      // ── Nav buttons ─────────────────────────────────────────────────────
       ".fresco-nav {",
       "  position: absolute; top: 12px; left: 12px; z-index: 10;",
       "  display: flex; flex-direction: column; gap: 6px;",
@@ -214,31 +161,11 @@
       "  outline: 2px solid var(--fresco-nav-focus); outline-offset: 1px;",
       "}",
       ".fresco-nav svg { width: 18px; height: 18px; }",
-      // Subtle dot grid on every Fresco viewer's host element. In
-      // the default clamped mode the image fills the viewport and
-      // the dots are invisible (OSD paints over them); in
-      // `infinite_canvas` mode the dots show through the void
-      // around the image so users can tell they're on a canvas,
-      // not in empty space. Fixed at 24×24 screen pixels so the
-      // spacing stays constant regardless of zoom — same approach
-      // Figma / Miro use.
-      //
-      // Theming: the six `--fresco-*` custom properties below are the
-      // entire palette surface. Defaults are light (matches the
-      // original look). The `prefers-color-scheme: dark` block flips
-      // them when the host is in `theme: :system` mode (the default)
-      // or `theme: :dark`. Explicit `[data-fresco-theme="light"]` /
-      // `["dark"]` rules below force a fixed palette regardless of
-      // OS preference.
-      //
-      // `theme: :inherit` mode opts the viewer OUT of Fresco's own
-      // var declarations entirely — both the base rule and the
-      // `@media` branch exclude it. The parent app's CSS supplies the
-      // six `--fresco-*` values (typically mapped to daisyUI or other
-      // theme tokens). The structural rule below (background-color +
-      // dot grid) applies to every viewer regardless of theme, so an
-      // `:inherit` viewer still renders the canvas backdrop using
-      // whatever colors the parent provides.
+
+      // ── Viewer host theming ─────────────────────────────────────────────
+      // Six --fresco-* custom properties drive the palette. The `inherit`
+      // theme opts out of every Fresco-supplied declaration so the parent
+      // app's CSS supplies the values (typically mapped to daisyUI tokens).
       ".fresco-viewer:not([data-fresco-theme=\"inherit\"]) {",
       "  --fresco-bg: #fafafa;",
       "  --fresco-grid-dot: #d4d4d8;",
@@ -247,20 +174,65 @@
       "  --fresco-nav-fg: #fff;",
       "  --fresco-nav-focus: rgba(255, 255, 255, 0.7);",
       "}",
-      // Structural styles — apply to every viewer regardless of
-      // theme mode. The vars are sourced from either Fresco's own
-      // declarations (above + the branches below) or from the
-      // parent app's CSS in `:inherit` mode.
+      // Structural rules — apply to every viewer regardless of theme.
+      // `touch-action: none` is critical for iOS Safari: without it the
+      // browser intercepts pinch + horizontal swipe (back-navigation) before
+      // our PointerEvent handlers see them.
+      // `user-select: none` blocks the i-beam highlight on the host so
+      // mouse-drag pan doesn't look like a text selection in flight.
+      // `cursor: grab` signals draggability; the engine swaps it to
+      // `grabbing` during pointer gestures (via inline style).
       ".fresco-viewer {",
+      "  position: relative; overflow: hidden;",
+      "  touch-action: none;",
+      "  user-select: none;",
+      "  -webkit-user-select: none;",
+      "  cursor: grab;",
       "  background-color: var(--fresco-bg);",
       "  background-image: radial-gradient(circle, var(--fresco-grid-dot) 1px, transparent 1px);",
       "  background-size: 24px 24px;",
+      "  outline: none;",
       "}",
-      // System mode: follow OS preference. Excluded when the host
-      // explicitly opts into light via data-fresco-theme="light", or
-      // into inherit (parent-driven) via "inherit". A forced-light
-      // viewer stays light on a dark-OS machine, and an inherit
-      // viewer keeps the parent's palette regardless of OS.
+      ".fresco-viewer.fresco--dragging { cursor: grabbing; }",
+      // Stage: the transformed surface holding the image. `transform-origin: 0 0`
+      // pairs with our (tx, ty, s) math — translate first, then scale around
+      // the stage's top-left, which is what makes `imageToScreen` correct.
+      // The combo `will-change: transform` + `backface-visibility: hidden`
+      // + a 3D transform string (`translate3d` + `scale3d` in apply()) keeps
+      // the layer permanently composited on a single GPU plane. Without all
+      // three, the browser re-rasterizes the layer the first time a zoom
+      // threshold is crossed — visible as a one-time flash on the image.
+      ".fresco-stage {",
+      "  position: absolute; top: 0; left: 0;",
+      "  transform-origin: 0 0;",
+      "  will-change: transform;",
+      "  backface-visibility: hidden;",
+      "  -webkit-backface-visibility: hidden;",
+      "}",
+      // The stage <img> MUST be at its natural pixel size — the engine's
+      // (tx, ty, s) math computes positions from `img.naturalWidth/Height`.
+      // CSS resets like Tailwind v4's preflight (`img { max-width: 100% }`)
+      // shrink the img's layout box and throw the transform math off, so
+      // we explicitly opt out of any width/max-width clamping here.
+      ".fresco-stage img {",
+      "  display: block;",
+      "  max-width: none;",
+      "  max-height: none;",
+      "  width: auto;",
+      "  height: auto;",
+      "  user-select: none;",
+      "  -webkit-user-drag: none;",
+      "  pointer-events: none;",
+      "}",
+      // (No CSS transition by design.) The engine sizes the <img> via its
+      // CSS width/height (so the rasterized layer never has to upgrade
+      // across zoom thresholds — that was the cause of the one-time
+      // flash). A CSS transition would only animate the stage's translate
+      // — the img resize would jump instantly — so the image would visibly
+      // grow first, then slide into position. Better to snap instantly
+      // and add a JS-driven animation later if needed.
+      // System mode: follow OS preference. Excluded for explicit light or
+      // inherit modes.
       "@media (prefers-color-scheme: dark) {",
       "  .fresco-viewer:not([data-fresco-theme=\"light\"]):not([data-fresco-theme=\"inherit\"]) {",
       "    --fresco-bg: #0a0a0a;",
@@ -271,11 +243,6 @@
       "    --fresco-nav-focus: rgba(255, 255, 255, 0.7);",
       "  }",
       "}",
-      // Explicit dark: forces dark regardless of OS preference. The
-      // attribute selector has the same specificity as the media
-      // query rule above, but the media-query rule excludes
-      // `[data-fresco-theme=\"light\"]`, so an explicit dark
-      // override here also wins on a light-OS machine.
       ".fresco-viewer[data-fresco-theme=\"dark\"] {",
       "  --fresco-bg: #0a0a0a;",
       "  --fresco-grid-dot: #262626;",
@@ -284,9 +251,6 @@
       "  --fresco-nav-fg: #fff;",
       "  --fresco-nav-focus: rgba(255, 255, 255, 0.7);",
       "}",
-      // Explicit light: redundant with the base defaults, but spelled
-      // out so the rule reads symmetrically and so future palette
-      // tweaks don't accidentally desync the two.
       ".fresco-viewer[data-fresco-theme=\"light\"] {",
       "  --fresco-bg: #fafafa;",
       "  --fresco-grid-dot: #d4d4d8;",
@@ -296,12 +260,7 @@
       "  --fresco-nav-focus: rgba(255, 255, 255, 0.7);",
       "}",
 
-      // ── Fresco.scrollStrip ─────────────────────────────────────────
-      // Strip mode: a scroll container holding one <img> per source.
-      // No dot grid (strip is a reading surface, not a canvas), no nav
-      // overlay by default. Reuses the same --fresco-* custom property
-      // surface so theme={:inherit} works the same way as for the
-      // viewer.
+      // ── Strip host theming (unchanged from 0.4.x) ───────────────────────
       ".fresco-strip:not([data-fresco-theme=\"inherit\"]) {",
       "  --fresco-bg: #fafafa;",
       "  --fresco-nav-bg: rgba(0, 0, 0, 0.55);",
@@ -314,11 +273,6 @@
       "  -webkit-overflow-scrolling: touch;",
       "  scrollbar-width: thin;",
       "}",
-      // Snap modes (opt-in via :snap_to_image). Strip mode itself uses
-      // native scroll; these rules add browser-native scroll-snap on
-      // the y-axis when the consumer opts in. Useful for IG-style
-      // feeds and slide decks; usually wrong for tall continuous
-      // content (manhwa pages), which is why the default is :off.
       ".fresco-strip.fresco-strip--snap-mandatory {",
       "  scroll-snap-type: y mandatory;",
       "}",
@@ -331,8 +285,6 @@
       ".fresco-strip.fresco-strip--snap-proximity > img {",
       "  scroll-snap-align: start;",
       "}",
-      // Dark mode for the strip: follow OS preference unless explicitly
-      // opted out via :light or :inherit. Mirrors the viewer's branch.
       "@media (prefers-color-scheme: dark) {",
       "  .fresco-strip:not([data-fresco-theme=\"light\"]):not([data-fresco-theme=\"inherit\"]) {",
       "    --fresco-bg: #0a0a0a;",
@@ -378,294 +330,8 @@
     return btn;
   }
 
-  function buildNav(viewer, container, opts) {
-    injectStyles();
-
-    var nav = document.createElement("div");
-    nav.className = "fresco-nav";
-
-    var zoomFactor = 1.4;
-
-    // Order matters — extensions append below this set via
-    // `handle.appendNavButton(...)`, so anything they add lands at the
-    // bottom of the column.
-    nav.appendChild(makeButton(ICONS.expand, "Toggle fullscreen", function() {
-      viewer.setFullPage(!viewer.isFullPage());
-    }));
-
-    // Opt-in rotation. 90° clockwise per click, tracked independently of
-    // zoom/pan — "Reset view" deliberately doesn't undo rotation, so a
-    // rotated image stays rotated when the user re-centers it. Sits
-    // between fullscreen and zoom-in so rotation lives with "view
-    // orientation" controls, not with "zoom level" controls.
-    if (opts && opts.rotate) {
-      nav.appendChild(makeButton(ICONS.rotate, "Rotate 90°", function() {
-        var current = viewer.viewport.getRotation();
-        viewer.viewport.setRotation((current + 90) % 360);
-      }));
-    }
-
-    nav.appendChild(makeButton(ICONS.zoomIn, "Zoom in", function() {
-      viewer.viewport.zoomBy(zoomFactor);
-      viewer.viewport.applyConstraints();
-    }));
-
-    nav.appendChild(makeButton(ICONS.zoomOut, "Zoom out", function() {
-      viewer.viewport.zoomBy(1 / zoomFactor);
-      viewer.viewport.applyConstraints();
-    }));
-
-    nav.appendChild(makeButton(ICONS.reset, "Reset view", function() {
-      viewer.viewport.goHome();
-    }));
-
-    if (getComputedStyle(container).position === "static") {
-      container.style.position = "relative";
-    }
-    container.appendChild(nav);
-
-    return nav;
-  }
-
   // ===========================================================================
-  // Bounds-preserving source swap utility
-  // ===========================================================================
-
-  // Open a new tile source on an active viewer while preserving the
-  // user's current viewport (pan + zoom). Used by extensions like Tessera
-  // when swapping between resolution layers without jarring the user.
-  function swapSourcePreservingBounds(viewer, url) {
-    var keepBounds = viewer.viewport.getBounds();
-    viewer.addOnceHandler("open", function() {
-      try { viewer.viewport.fitBounds(keepBounds, true); } catch (_) {}
-    });
-    try { viewer.open(resolveTileSource(url)); } catch (_) { /* ignore */ }
-  }
-
-  // ===========================================================================
-  // The viewer handle exposed via Fresco.viewerFor
-  // ===========================================================================
-
-  // ===========================================================================
-  // Fast-pan CSS-transform module
-  //
-  // When the consumer opts into `:pan_optimized`, this module replaces OSD's
-  // per-frame canvas redraw with a CSS-transform glide for the duration of
-  // each pan gesture. The technique mirrors native browser scroll:
-  //
-  //   - On pan-start: snapshot zoom + canvas state, swap OSD's drawer for a
-  //     no-op so per-tick redraws are skipped. Emit `fast-pan {phase:"start"}`.
-  //   - Per pan tick: read OSD's current viewport, compute the screen-pixel
-  //     delta from start, apply `transform: translate3d(dx, dy, 0)` to the
-  //     canvas. Emit `fast-pan {phase:"delta", x: dx, y: dy}` so overlays
-  //     (Etcher) can transform in lockstep.
-  //   - On animation-finish (or zoom-change / overscan bail): restore OSD's
-  //     drawer, clear the canvas transform, trigger one repaint so OSD
-  //     paints at its committed viewport position. Emit `fast-pan {phase:"end"}`.
-  //
-  // Bails out (immediately committing and falling back to OSD's normal redraw
-  // path) when:
-  //   - Zoom changes mid-pan (transform math no longer holds)
-  //   - The :rotate feature is active (rotation invalidates simple translate)
-  //   - Cumulative delta crosses the overscan threshold (50% of viewport
-  //     height) — beyond that, the painted canvas wouldn't cover the visible
-  //     area, so we accept a redraw and reset.
-  // ===========================================================================
-
-  function installFastPan(viewer, handle, rotateActive) {
-    if (rotateActive) {
-      warn("pan_optimized + :rotate are mutually exclusive — fast-pan disabled");
-      return;
-    }
-    if (!viewer || !viewer.drawer) {
-      warn("viewer.drawer not present at install time — fast-pan disabled");
-      return;
-    }
-
-    var state = null; // null when inactive; object when fast-pan in flight
-
-    function warn(msg) {
-      if (typeof console !== "undefined" && console.warn) {
-        console.warn("[Fresco] pan_optimized: " + msg);
-      }
-    }
-
-    function canvas() {
-      // OSD may swap drawer implementations between releases; treat the
-      // canvas element as the only stable contract.
-      return viewer.drawer && (viewer.drawer.canvas || (viewer.drawer.getCanvas && viewer.drawer.getCanvas()));
-    }
-
-    function viewportHeightPx() {
-      var c = canvas();
-      return c ? c.clientHeight || c.height : 0;
-    }
-
-    function startFastPan() {
-      var c = canvas();
-      if (!c) {
-        warn("drawer has no canvas element — fast-pan disabled");
-        return;
-      }
-      var drawer = viewer.drawer;
-      var origUpdate = drawer.update;
-      var origDraw = drawer.draw;
-
-      // OSD 4.1's canvas drawer exposes `.update()`; older drawer APIs
-      // (and some custom drawers) used `.draw()`. We need at least one
-      // to suppress per-frame redraw. If neither exists, the consumer
-      // is on an unfamiliar drawer and we can't safely no-op anything.
-      if (typeof origUpdate !== "function" && typeof origDraw !== "function") {
-        warn("drawer has neither .update nor .draw — fast-pan disabled (unknown OSD drawer)");
-        return;
-      }
-
-      state = {
-        canvas: c,
-        origUpdate: origUpdate,
-        origDraw: origDraw,
-        startCenter: viewer.viewport.getCenter(true).clone(),
-        startZoom: viewer.viewport.getZoom(true),
-        dx: 0,
-        dy: 0,
-        watchdog: null
-      };
-
-      // Suppress per-frame redraw for the duration of the gesture. Override
-      // whichever methods exist — being defensive about both shapes means
-      // future OSD drawer revisions don't silently break the fast path.
-      if (typeof origUpdate === "function") drawer.update = function() {};
-      if (typeof origDraw === "function") drawer.draw = function() {};
-
-      c.style.willChange = "transform";
-      handle._emit("fast-pan", { phase: "start", x: 0, y: 0 });
-      armWatchdog();
-    }
-
-    // Defensive backup: if no animation events arrive within the
-    // watchdog window, commit anyway. The `immediately`-bail above
-    // covers the known OSD callers that don't fire animation events,
-    // but a custom OSD plugin or a future OSD release could pan
-    // through some other code path; without this, fast-pan could
-    // suppress the drawer indefinitely and the user would see stale
-    // tiles. 1s is plenty for any reasonable spring animation; if a
-    // legitimate spring tick comes in, we re-arm.
-    function armWatchdog() {
-      if (!state) return;
-      if (state.watchdog) clearTimeout(state.watchdog);
-      state.watchdog = setTimeout(function() {
-        if (state) {
-          warn("watchdog fired — committing without animation-finish (no spring ticks within 1s)");
-          commitFastPan();
-        }
-      }, 1000);
-    }
-
-    function tickFastPan() {
-      if (!state) return;
-      // Bail to commit if zoom drifted mid-pan.
-      if (viewer.viewport.getZoom(true) !== state.startZoom) {
-        commitFastPan();
-        return;
-      }
-      // Compute where the original center point sits on screen now that
-      // OSD has moved the viewport. That delta IS the screen-pixel
-      // distance we need to translate the canvas by so the existing
-      // pixels visually follow OSD's intent without a redraw.
-      var startPxNow = viewer.viewport.pixelFromPoint(state.startCenter, true);
-      var startPxThen = new window.OpenSeadragon.Point(
-        state.canvas.clientWidth / 2,
-        state.canvas.clientHeight / 2
-      );
-      var dx = startPxNow.x - startPxThen.x;
-      var dy = startPxNow.y - startPxThen.y;
-
-      // Overscan bail: beyond half a viewport, the painted tiles can't
-      // cover the visible area cleanly. Commit and let OSD repaint.
-      var vh = viewportHeightPx();
-      if (vh > 0 && Math.abs(dy) > vh * 0.5) {
-        commitFastPan();
-        return;
-      }
-
-      // dx/dy is where the original viewport center (image point at
-      // pan-start) sits on screen NOW, relative to canvas center. When
-      // the user drags down, OSD pans the viewport up, the original
-      // center appears further down on screen → dy positive. We move
-      // the canvas in the same direction so the existing pixels glide
-      // with the user's gesture; an overlay that wants to stay anchored
-      // to the same image-space coordinates applies the same transform.
-      state.dx = dx;
-      state.dy = dy;
-      state.canvas.style.transform =
-        "translate3d(" + dx + "px, " + dy + "px, 0)";
-      handle._emit("fast-pan", { phase: "delta", x: dx, y: dy });
-      armWatchdog();
-    }
-
-    function commitFastPan() {
-      if (!state) return;
-      if (state.watchdog) { clearTimeout(state.watchdog); state.watchdog = null; }
-      var c = state.canvas;
-      var drawer = viewer.drawer;
-
-      // Restore whichever drawer methods we overrode in startFastPan.
-      if (typeof state.origUpdate === "function") drawer.update = state.origUpdate;
-      if (typeof state.origDraw === "function") drawer.draw = state.origDraw;
-
-      // Clear the CSS transform — OSD's viewport already reflects the
-      // pan (OSD's own pan handler updated it on every tick); the next
-      // draw will paint at the correct position.
-      c.style.transform = "";
-      c.style.willChange = "";
-
-      // Force one immediate redraw at the committed position via OSD's
-      // public API. Works regardless of which drawer method names exist —
-      // safer than calling drawer internals (`update` / `draw`) directly.
-      try { viewer.forceRedraw(); } catch (_) {}
-
-      state = null;
-      handle._emit("fast-pan", { phase: "end" });
-    }
-
-    // OSD fires `pan` on user gesture or programmatic pan, `animation`
-    // per spring tick, `animation-finish` when the spring settles. We
-    // start on the first spring `pan`, follow each `animation` tick,
-    // and commit on `animation-finish`.
-    //
-    // We deliberately skip pan events with `immediately === true`
-    // (touch drag, wheel scroll, custom per-rAF `panBy(delta, true)`
-    // loops): immediate panners don't fire `animation` or
-    // `animation-finish`, so if we engaged fast-pan for them the
-    // drawer would stay suppressed forever and the user would never
-    // see new tiles paint. Native OSD redraw is already snappy
-    // enough for those callers (it's the spring momentum that
-    // benefits from the fast path — that's the slow case on iOS).
-    viewer.addHandler("pan", function(e) {
-      if (e && e.immediately) return;
-      if (!state) startFastPan();
-    });
-
-    viewer.addHandler("animation", function() {
-      if (state) tickFastPan();
-    });
-
-    viewer.addHandler("animation-finish", function() {
-      if (state) commitFastPan();
-    });
-
-    // Bail aggressively on any zoom intent so the fast path doesn't
-    // smear into zoom frames.
-    viewer.addHandler("zoom", function() {
-      if (state) commitFastPan();
-    });
-  }
-
-  // ===========================================================================
-  // Shared event-bus helper. Both the OSD viewer handle (`makeHandle`) and the
-  // strip handle (`makeStripHandle`) expose the same `on(name, fn) →
-  // unsubscribe` channel and the same internal `_emit(name, payload)`. Pulling
-  // this out keeps both factories in sync and removes a copy-paste opportunity.
+  // Shared event-bus helper. Used by the viewer handle and the strip handle.
   // ===========================================================================
 
   function createEventBus() {
@@ -682,11 +348,6 @@
         };
       },
 
-      // Internal: synchronous broadcast to subscribers. Underscore-prefixed
-      // because consumers should never call this — they listen via `on(name,
-      // fn)` and the emit side is owned by Fresco's own modules (OSD-event
-      // bridges in `makeHandle`, the scroll bridge in the strip hook, the
-      // fast-pan module installed when `:pan_optimized` is set, etc.).
       _emit: function(eventName, payload) {
         var arr = subscribers[eventName] || [];
         for (var i = 0; i < arr.length; i++) {
@@ -699,10 +360,8 @@
   // ===========================================================================
   // Shared nav-button attach helper. Returns an unsubscribe function carrying
   // `.setIcon(svg) / .setTitle(text) / .el` so callers can mutate after
-  // creation without re-adding (which would reshuffle position). When `navEl`
-  // is null (e.g., strip mode without a built-in nav), returns a no-op so
-  // callers can call `appendNavButton` unconditionally and get an inert
-  // unsubscribe back.
+  // creation without re-adding. When `navEl` is null (strip without a built-in
+  // nav), returns a no-op so callers can call `appendNavButton` unconditionally.
   // ===========================================================================
 
   function attachNavButton(navEl, svg, title, onClick) {
@@ -721,103 +380,706 @@
     return remove;
   }
 
-  function makeHandle(viewer, container, navEl) {
+  // ===========================================================================
+  // Viewer engine — the new lite pan/zoom controller.
+  //
+  // State lives in closure-locals; no classes. The stage div (server-rendered
+  // as a child of the host) receives `transform: translate3d(tx, ty, 0) scale(s)`.
+  // All gestures mutate (tx, ty, s); a single rAF-coalesced apply() writes the
+  // transform and emits events.
+  //
+  // Clamping (default mode): the image must cover the viewport — sMin = sFit
+  // (image fits viewport), pan clamped so no void shows past edges.
+  // Infinite-canvas mode: no pan clamp, sMin lowered to sFit * 0.05.
+  // ===========================================================================
+
+  function mountFrescoViewer(el) {
+    // ── DOM ────────────────────────────────────────────────────────────────
+    var stage = el.querySelector("[data-fresco-stage]") || el.querySelector(".fresco-stage");
+    var img = stage && stage.querySelector("[data-fresco-img]");
+
+    if (!stage || !img) {
+      console.warn("[Fresco] mount: missing .fresco-stage or <img> inside", el);
+      return null;
+    }
+
+    // Apply touch-action inline too — the stylesheet may not yet have
+    // applied when iOS Safari processes the first pinch.
+    el.style.touchAction = "none";
+
+    // Belt-and-suspenders against framework resets (Tailwind preflight, etc.)
+    // that apply `max-width: 100%` to <img>. The engine assumes the img is
+    // at natural pixel size; if a framework rule wins (e.g., loaded after
+    // Fresco's stylesheet), the transform math produces an off-center
+    // result. Inline styles beat any stylesheet rule.
+    img.style.maxWidth = "none";
+    img.style.maxHeight = "none";
+    img.style.width = "auto";
+    img.style.height = "auto";
+
+    var infiniteCanvas = el.dataset.infiniteCanvas === "true";
+
+    // ── State ──────────────────────────────────────────────────────────────
+    var tx = 0, ty = 0, s = 1;            // current transform
+    var iw = 0, ih = 0;                   // image natural dimensions (set on load)
+    var vw = 0, vh = 0;                   // viewport dimensions (ResizeObserver-tracked)
+    var sFit = 1;                         // cached fit-to-view scale
+    var sMin = 1, sMax = 40;              // zoom bounds (recomputed when sFit changes)
+    var currentSrc = img.getAttribute("src") || el.dataset.src || "";
+    var frameRequested = false;
+    var ready = false;                    // becomes true once the first fit() runs
+
     var bus = createEventBus();
 
-    // Bridge OSD events into our subscriber list.
-    function bridge(osdEvent, ourEvent) {
-      viewer.addHandler(osdEvent, function(e) {
-        bus._emit(ourEvent, e);
+    // Pointer tracking. Map<pointerId, {x, y}> in *page* coords (we convert to
+    // viewport-local where needed via getBoundingClientRect()).
+    var pointers = new Map();
+    // gestureStart is null when idle; otherwise a snapshot taken at the moment
+    // the gesture started (1-pointer pan, 2-pointer pinch).
+    var gestureStart = null;
+
+    // ── Transform math ─────────────────────────────────────────────────────
+
+    function clamp(v, lo, hi) {
+      return v < lo ? lo : v > hi ? hi : v;
+    }
+
+    function recomputeBounds() {
+      // sFit = the scale at which the image just fits inside the viewport
+      // (CONTAIN). In default (clamped) mode, this is also the minimum zoom.
+      // In infinite-canvas mode, the user can zoom out further (to thumbnail).
+      if (iw > 0 && ih > 0 && vw > 0 && vh > 0) {
+        sFit = Math.min(vw / iw, vh / ih);
+      } else {
+        sFit = 1;
+      }
+      sMin = infiniteCanvas ? sFit * 0.05 : sFit;
+      // sMax — twin cap. (1) Hard absolute: 8× natural pixel size, matching
+      // OSD's old `maxZoomPixelRatio: 8`. (2) GPU safety: never let the
+      // rasterized layer cross MAX_RASTER_DIM on either axis, or the browser
+      // re-allocates the texture mid-zoom and the image flashes. 4096 is
+      // safe on every mainstream GPU including mobile Safari; 8192 also
+      // works on modern desktops. Going past these causes the flash the
+      // user reported.
+      var MAX_RASTER_DIM = 8192;
+      var rasterCap = MAX_RASTER_DIM / Math.max(iw || 1, ih || 1);
+      sMax = Math.min(8, rasterCap);
+      // Don't let sMax fall below sFit (would be a contradiction — can't
+      // zoom in past fit), or below a small absolute floor for safety.
+      if (sMax < sFit) sMax = sFit;
+      if (sMax < 1) sMax = Math.max(sFit, 1);
+    }
+
+    function clampPan() {
+      if (infiniteCanvas) return;
+      // Default mode: image must cover the viewport. If image larger than
+      // viewport along an axis, clamp tx/ty so edges don't pull inside.
+      // If smaller (only happens when image fits exactly at sFit on the
+      // limiting axis), center on that axis.
+      var imgW = iw * s;
+      var imgH = ih * s;
+      if (imgW >= vw) {
+        tx = clamp(tx, vw - imgW, 0);
+      } else {
+        tx = (vw - imgW) / 2;
+      }
+      if (imgH >= vh) {
+        ty = clamp(ty, vh - imgH, 0);
+      } else {
+        ty = (vh - imgH) / 2;
+      }
+    }
+
+    function fit() {
+      recomputeBounds();
+      s = sFit;
+      tx = (vw - iw * s) / 2;
+      ty = (vh - ih * s) / 2;
+      clampPan();
+      requestFrame();
+    }
+
+    function zoomAt(px, py, k) {
+      // (px, py) viewport-local. Scale around that point so the image-space
+      // pixel under it stays put.
+      var s2 = clamp(s * k, sMin, sMax);
+      if (s2 === s) return;
+      var kEff = s2 / s;
+      tx = px - (px - tx) * kEff;
+      ty = py - (py - ty) * kEff;
+      s = s2;
+      clampPan();
+      bus._emit("zoom", { scale: s });
+      requestFrame();
+    }
+
+    function panBy(dx, dy) {
+      tx += dx;
+      ty += dy;
+      clampPan();
+      bus._emit("pan", { tx: tx, ty: ty });
+      requestFrame();
+    }
+
+    function setTransform(nextTx, nextTy, nextS) {
+      tx = nextTx;
+      ty = nextTy;
+      s = clamp(nextS, sMin, sMax);
+      clampPan();
+      requestFrame();
+    }
+
+    function apply() {
+      // Two-part write per frame:
+      // (1) the <img> takes its scaled CSS size — the browser renders the
+      //     image at its current visible dimensions as plain layout, so it
+      //     never has to upgrade a composited-layer texture mid-zoom (which
+      //     was the source of the one-time flash);
+      // (2) the stage carries translate3d only — pan is a pure GPU
+      //     composite move, no layout, still 60fps smooth.
+      img.style.width = (iw * s) + "px";
+      img.style.height = (ih * s) + "px";
+      stage.style.transform =
+        "translate3d(" + tx + "px, " + ty + "px, 0)";
+      bus._emit("animation", { tx: tx, ty: ty, scale: s });
+      bus._emit("update-viewport", { tx: tx, ty: ty, scale: s });
+    }
+
+    function requestFrame() {
+      if (frameRequested) return;
+      frameRequested = true;
+      window.requestAnimationFrame(function() {
+        frameRequested = false;
+        apply();
       });
     }
 
-    bridge("zoom", "zoom");
-    bridge("pan", "pan");
-    bridge("open", "open");
-    bridge("resize", "resize");
+    function setTransitioning(_on) {
+      // No-op for now — kept as a hook for a future JS-driven smooth-zoom
+      // animation. (CSS transitions don't work cleanly with the
+      // width/height-on-img rendering approach because the img resize
+      // can't be synchronized with a transform-only transition.)
+      el.classList.remove("fresco--transitioning");
+    }
 
-    // Per-frame events. `zoom` and `pan` only fire on the *intent* to
-    // zoom/pan (input or operation start). `animation` and `update-viewport`
-    // fire on every animation tick, so extensions that render in lockstep
-    // with the image (annotation overlays, measurement tools) get a chance
-    // to redraw at frame rate rather than only at the endpoints of OSD's
-    // spring interpolation.
-    bridge("animation", "animation");
-    bridge("update-viewport", "update-viewport");
+    // ── Pointer gestures (mouse + touch + pen, unified) ────────────────────
+
+    function viewportRect() {
+      return el.getBoundingClientRect();
+    }
+
+    function midpoint(p1, p2) {
+      return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+    }
+
+    function distance(p1, p2) {
+      var dx = p2.x - p1.x, dy = p2.y - p1.y;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function snapshotGesture() {
+      // Take a fresh snapshot of the current pointers and viewport, used at
+      // gesture start and whenever the pointer count changes (going from 2 → 1,
+      // for example). All viewport-local coords are derived from page coords
+      // at snapshot time so subsequent moves are just deltas off the snapshot.
+      var rect = viewportRect();
+      var pts = Array.from(pointers.values());
+      if (pts.length === 1) {
+        gestureStart = {
+          kind: "pan",
+          tx: tx, ty: ty,
+          x: pts[0].x, y: pts[0].y,
+          rectLeft: rect.left, rectTop: rect.top
+        };
+      } else if (pts.length >= 2) {
+        var mid = midpoint(pts[0], pts[1]);
+        gestureStart = {
+          kind: "pinch",
+          tx: tx, ty: ty, s: s,
+          // midpoint in viewport-local coords (anchor for the zoom)
+          midX: mid.x - rect.left,
+          midY: mid.y - rect.top,
+          // page-coords midpoint for delta tracking (so pinch can also pan)
+          pageMidX: mid.x,
+          pageMidY: mid.y,
+          dist: distance(pts[0], pts[1]),
+          rectLeft: rect.left, rectTop: rect.top
+        };
+      } else {
+        gestureStart = null;
+      }
+    }
+
+    function onPointerDown(e) {
+      // Only primary buttons drive gestures — secondary/middle-click should
+      // bubble (browsers use them for context menu, scroll, etc.).
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      // Don't steal pointer events that originated inside the nav (or any
+      // interactive element marked with `data-fresco-no-capture`). Without
+      // this guard, setPointerCapture on the host would hijack the pointer
+      // before the button's click sequence completes, and nothing would
+      // happen when the user clicks zoom-in / reset / fullscreen. The same
+      // guard runs in onWheel and onDblClick so scrolling/double-clicking
+      // over a button doesn't bleed through to the engine either.
+      if (isFromNav(e)) return;
+      // Critical: preventDefault stops Chrome from initiating its built-in
+      // drag-image / text-selection gestures over the viewer. Without this,
+      // mouse-drag pan turns into "save image" or i-beam selection, and
+      // pointer capture never engages cleanly.
+      e.preventDefault();
+      try { el.setPointerCapture(e.pointerId); } catch (_) {}
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      setTransitioning(false);
+      el.classList.add("fresco--dragging");
+      snapshotGesture();
+    }
+
+    function onPointerMove(e) {
+      if (!pointers.has(e.pointerId)) return;
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (!gestureStart) return;
+
+      if (gestureStart.kind === "pan") {
+        var dx = e.clientX - gestureStart.x;
+        var dy = e.clientY - gestureStart.y;
+        tx = gestureStart.tx + dx;
+        ty = gestureStart.ty + dy;
+        clampPan();
+        bus._emit("pan", { tx: tx, ty: ty });
+        requestFrame();
+        return;
+      }
+
+      if (gestureStart.kind === "pinch") {
+        var pts = Array.from(pointers.values());
+        if (pts.length < 2) return;
+        var newDist = distance(pts[0], pts[1]);
+        if (newDist === 0) return;
+        var newMid = midpoint(pts[0], pts[1]);
+
+        // Step 1: zoom around the start midpoint (anchor stays fixed for
+        // the duration of the pinch — feels more stable than re-anchoring).
+        var s2 = clamp(gestureStart.s * (newDist / gestureStart.dist), sMin, sMax);
+        var kEff = s2 / gestureStart.s;
+        var newTx = gestureStart.midX - (gestureStart.midX - gestureStart.tx) * kEff;
+        var newTy = gestureStart.midY - (gestureStart.midY - gestureStart.ty) * kEff;
+
+        // Step 2: pan by the midpoint delta so users can also "drag" mid-pinch.
+        newTx += (newMid.x - gestureStart.pageMidX);
+        newTy += (newMid.y - gestureStart.pageMidY);
+
+        tx = newTx; ty = newTy; s = s2;
+        clampPan();
+        bus._emit("zoom", { scale: s });
+        bus._emit("pan", { tx: tx, ty: ty });
+        requestFrame();
+      }
+    }
+
+    function onPointerUp(e) {
+      pointers.delete(e.pointerId);
+      try { el.releasePointerCapture(e.pointerId); } catch (_) {}
+      // If we drop from pinch → pan, snapshot the remaining pointer so the
+      // subsequent move continues smoothly from the current state.
+      if (pointers.size >= 1) {
+        snapshotGesture();
+      } else {
+        gestureStart = null;
+        el.classList.remove("fresco--dragging");
+      }
+    }
+
+    // Suppress Chrome's drag-image ghost as a belt-and-suspenders against
+    // the pointerdown preventDefault — some Chrome versions still fire
+    // `dragstart` for images even when pointerdown is suppressed.
+    function onDragStart(e) {
+      e.preventDefault();
+    }
+
+    // ── Wheel zoom (centered on cursor) ────────────────────────────────────
+
+    function isFromNav(e) {
+      return e.target && e.target.closest && (
+        e.target.closest(".fresco-nav") ||
+        e.target.closest("[data-fresco-no-capture]")
+      );
+    }
+
+    function onWheel(e) {
+      if (isFromNav(e)) return;
+      e.preventDefault();
+      var rect = viewportRect();
+      var px = e.clientX - rect.left;
+      var py = e.clientY - rect.top;
+      // Smooth exponential decay — feels uniform across mouse wheel,
+      // trackpad two-finger scroll (ctrlKey=false), and trackpad pinch
+      // (ctrlKey=true, smaller deltaY). Sign convention: deltaY > 0 means
+      // scroll down → zoom OUT.
+      var k = Math.exp(-e.deltaY * 0.0015);
+      setTransitioning(false);
+      zoomAt(px, py, k);
+    }
+
+    function onDblClick(e) {
+      if (isFromNav(e)) return;
+      var rect = viewportRect();
+      var px = e.clientX - rect.left;
+      var py = e.clientY - rect.top;
+      setTransitioning(false);
+      zoomAt(px, py, 2);
+    }
+
+    // ── Keyboard ───────────────────────────────────────────────────────────
+
+    function onKeyDown(e) {
+      // Don't steal keys when the user is typing in a form or contenteditable.
+      var t = e.target;
+      if (t && t !== el && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      var handled = true;
+      setTransitioning(false);
+      switch (e.key) {
+        case "ArrowUp":    panBy(0, 60);  break;
+        case "ArrowDown":  panBy(0, -60); break;
+        case "ArrowLeft":  panBy(60, 0);  break;
+        case "ArrowRight": panBy(-60, 0); break;
+        case "+": case "=":
+          zoomAt(vw / 2, vh / 2, 1.4); break;
+        case "-": case "_":
+          zoomAt(vw / 2, vh / 2, 1 / 1.4); break;
+        case "0":
+          fit(); break;
+        case "f": case "F":
+          toggleFullscreen(); break;
+        default:
+          handled = false;
+          setTransitioning(false);
+      }
+      if (handled) e.preventDefault();
+    }
+
+    function toggleFullscreen() {
+      if (document.fullscreenElement === el) {
+        if (document.exitFullscreen) document.exitFullscreen();
+      } else if (el.requestFullscreen) {
+        el.requestFullscreen().catch(function() {});
+      }
+    }
+
+    // ── Image load + initial fit ───────────────────────────────────────────
+
+    function initEngineFromImg() {
+      iw = img.naturalWidth || img.width || 0;
+      ih = img.naturalHeight || img.height || 0;
+      // Use decode() if available so the bitmap is GPU-uploaded before we
+      // apply the first transform — eliminates "transform on undecoded image"
+      // flash on slow connections. Viewport dimensions are re-read inside
+      // doFit so any layout settling during decode() is captured fresh.
+      var doFit = function() {
+        var rect = viewportRect();
+        vw = rect.width;
+        vh = rect.height;
+        recomputeBounds();
+        fit();
+        ready = true;
+        bus._emit("open", { src: currentSrc, naturalWidth: iw, naturalHeight: ih });
+      };
+      if (typeof img.decode === "function") {
+        img.decode().then(doFit, doFit);
+      } else {
+        doFit();
+      }
+    }
+
+    function onImgLoad() {
+      initEngineFromImg();
+    }
+
+    // ── Source swap ────────────────────────────────────────────────────────
+
+    function setSource(url) {
+      if (!url) return;
+      currentSrc = url;
+      var resolved = resolveTileSource(url);
+      if (resolved.type !== "image") {
+        console.error(
+          "[Fresco] tile-source types other than \"image\" aren't supported in 0.5.x — " +
+          "Tessera integration is planned for a later release."
+        );
+        return;
+      }
+      ready = false;
+      // New <img> load → fit on completion.
+      img.addEventListener("load", onImgLoad, { once: true });
+      img.src = resolved.url;
+    }
+
+    function swapSourcePreservingBounds(url) {
+      if (!url) return;
+      currentSrc = url;
+      var resolved = resolveTileSource(url);
+      if (resolved.type !== "image") {
+        console.error(
+          "[Fresco] tile-source types other than \"image\" aren't supported in 0.5.x — " +
+          "Tessera integration is planned for a later release."
+        );
+        return;
+      }
+      // Preserve (tx, ty, s) on load; recompute sFit/bounds against new dims
+      // but don't refit. If natural dimensions change drastically, this may
+      // crop weirdly — acceptable tradeoff for now (matches OSD's behavior).
+      var prevTx = tx, prevTy = ty, prevS = s;
+      img.addEventListener("load", function once() {
+        img.removeEventListener("load", once);
+        iw = img.naturalWidth || img.width || 0;
+        ih = img.naturalHeight || img.height || 0;
+        recomputeBounds();
+        tx = prevTx; ty = prevTy; s = clamp(prevS, sMin, sMax);
+        clampPan();
+        bus._emit("open", { src: currentSrc, naturalWidth: iw, naturalHeight: ih });
+        requestFrame();
+      }, { once: true });
+      img.src = resolved.url;
+    }
+
+    // ── Viewport resize ────────────────────────────────────────────────────
+
+    var resizeObserver = null;
+    if (typeof ResizeObserver === "function") {
+      resizeObserver = new ResizeObserver(function() {
+        if (!ready) return;
+        var rect = viewportRect();
+        if (rect.width === vw && rect.height === vh) return;
+        vw = rect.width;
+        vh = rect.height;
+        recomputeBounds();
+        // Preserve user's zoom intent on resize: only force-up if s falls
+        // below the new sMin (e.g. viewport grew, fit scale grew). Always
+        // re-clamp pan against the new bounds.
+        if (s < sMin) s = sMin;
+        if (s > sMax) s = sMax;
+        clampPan();
+        bus._emit("resize", { width: vw, height: vh });
+        requestFrame();
+      });
+      resizeObserver.observe(el);
+    }
+
+    // ── Listeners ──────────────────────────────────────────────────────────
+
+    el.addEventListener("pointerdown", onPointerDown);
+    el.addEventListener("pointermove", onPointerMove);
+    el.addEventListener("pointerup", onPointerUp);
+    el.addEventListener("pointercancel", onPointerUp);
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("dblclick", onDblClick);
+    el.addEventListener("keydown", onKeyDown);
+    el.addEventListener("dragstart", onDragStart);
+
+    // Build the nav overlay (returns the nav element so the handle can attach
+    // extension buttons via `appendNavButton`).
+    var navEl = buildNav(el, {
+      onFit: function() { setTransitioning(true); fit(); },
+      onZoomIn: function() {
+        var rect = viewportRect();
+        vw = rect.width; vh = rect.height;
+        setTransitioning(false);
+        zoomAt(vw / 2, vh / 2, 1.4);
+      },
+      onZoomOut: function() {
+        var rect = viewportRect();
+        vw = rect.width; vh = rect.height;
+        setTransitioning(false);
+        zoomAt(vw / 2, vh / 2, 1 / 1.4);
+      },
+      onFullscreen: toggleFullscreen
+    });
+
+    // Wire image-load. If the server-rendered <img> already finished decoding
+    // by the time we mounted, fire immediately; otherwise wait on `load`.
+    if (img.complete && img.naturalWidth > 0) {
+      initEngineFromImg();
+    } else {
+      img.addEventListener("load", onImgLoad, { once: true });
+    }
+
+    // ── Teardown ───────────────────────────────────────────────────────────
+
+    function teardown() {
+      el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("pointermove", onPointerMove);
+      el.removeEventListener("pointerup", onPointerUp);
+      el.removeEventListener("pointercancel", onPointerUp);
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("dblclick", onDblClick);
+      el.removeEventListener("keydown", onKeyDown);
+      el.removeEventListener("dragstart", onDragStart);
+      if (resizeObserver) {
+        try { resizeObserver.disconnect(); } catch (_) {}
+        resizeObserver = null;
+      }
+      if (navEl && navEl.parentNode) navEl.parentNode.removeChild(navEl);
+    }
+
+    // ── Controller — internal-facing API used by makeHandle ────────────────
 
     return {
-      // Direct access to the underlying OpenSeadragon Viewer instance. Use
-      // this when you need an OSD API that Fresco doesn't expose first-class
-      // (custom zoom/pan constraints, raw event handlers like
-      // `canvas-double-click`, OSD plugin registration, …). Advanced escape
-      // hatch — file an issue if you find yourself reaching for it routinely;
-      // common patterns should become first-class Fresco APIs. See the
-      // "Advanced: OSD escape hatch" section in README.md for the stability
-      // contract.
-      openSeadragon: viewer,
+      el: el,
+      stage: stage,
+      img: img,
+      navEl: navEl,
+      bus: bus,
+      getTransform: function() { return { tx: tx, ty: ty, s: s }; },
+      getViewportSize: function() { return { vw: vw, vh: vh }; },
+      getImageSize: function() { return { iw: iw, ih: ih }; },
+      isInfiniteCanvas: function() { return infiniteCanvas; },
+      getCurrentSrc: function() { return currentSrc; },
+      fit: function() { setTransitioning(true); fit(); },
+      zoomAt: function(px, py, k) { setTransitioning(true); zoomAt(px, py, k); },
+      panBy: function(dx, dy) { panBy(dx, dy); },
+      setTransform: setTransform,
+      setSource: setSource,
+      swapSourcePreservingBounds: swapSourcePreservingBounds,
+      teardown: teardown
+    };
+  }
 
-      // Back-compat alias for `openSeadragon`. `viewer` was the original
-      // (undocumented) name for this field through 0.1.x and Etcher already
-      // depends on it; new code should prefer `openSeadragon`.
-      viewer: viewer,
+  // ===========================================================================
+  // Nav overlay — four buttons (fullscreen, zoom-in, zoom-out, reset). The
+  // host element provides relative positioning (set in CSS), and the nav
+  // attaches as a child so extensions can append more buttons via
+  // `handle.appendNavButton(...)`.
+  // ===========================================================================
 
-      container: container,
+  function buildNav(host, handlers) {
+    injectStyles();
+    var nav = document.createElement("div");
+    nav.className = "fresco-nav";
+    nav.appendChild(makeButton(ICONS.expand, "Toggle fullscreen", handlers.onFullscreen));
+    nav.appendChild(makeButton(ICONS.zoomIn, "Zoom in",  handlers.onZoomIn));
+    nav.appendChild(makeButton(ICONS.zoomOut, "Zoom out", handlers.onZoomOut));
+    nav.appendChild(makeButton(ICONS.reset,  "Reset view", handlers.onFit));
+    host.appendChild(nav);
+    return nav;
+  }
 
-      imageToScreen: function(pt) {
-        return viewer.viewport.viewportToWindowCoordinates(
-          viewer.viewport.imageToViewportCoordinates(pt.x, pt.y)
-        );
-      },
+  // ===========================================================================
+  // Viewer handle — the public surface exposed to extensions through
+  // `window.Fresco.viewerFor(id)`.
+  // ===========================================================================
 
-      screenToImage: function(pt) {
-        return viewer.viewport.viewportToImageCoordinates(
-          viewer.viewport.windowToViewportCoordinates(new window.OpenSeadragon.Point(pt.x, pt.y))
-        );
-      },
+  function makeViewerHandle(controller) {
+    var bus = controller.bus;
+    var el = controller.el;
 
-      getViewportBounds: function() {
-        return viewer.viewport.getBounds();
-      },
+    function imageToScreen(pt) {
+      // Image-pixel coords → page-pixel coords (matches 0.4.x convention so
+      // overlay code that read OSD's viewportToWindowCoordinates keeps working
+      // with minimal change).
+      var t = controller.getTransform();
+      var rect = el.getBoundingClientRect();
+      return {
+        x: (pt.x || 0) * t.s + t.tx + rect.left,
+        y: (pt.y || 0) * t.s + t.ty + rect.top
+      };
+    }
 
-      fitBounds: function(rect, immediately) {
-        viewer.viewport.fitBounds(rect, !!immediately);
-      },
+    function screenToImage(pt) {
+      var t = controller.getTransform();
+      var rect = el.getBoundingClientRect();
+      return {
+        x: ((pt.x || 0) - rect.left - t.tx) / t.s,
+        y: ((pt.y || 0) - rect.top - t.ty) / t.s
+      };
+    }
 
-      setSource: function(url) {
-        try { viewer.open(resolveTileSource(url)); } catch (_) {}
-      },
+    function getViewportBounds() {
+      // Image-pixel rect currently visible. Semantics: a rect whose top-left
+      // is the image-coord at the viewport's top-left, sized to viewport in
+      // image pixels. NOTE: 0.4.x returned OSD's normalized 0–1 viewport rect;
+      // 0.5.x returns image-pixel coords directly — easier to use, but a
+      // breaking change. See CHANGELOG.
+      var t = controller.getTransform();
+      var v = controller.getViewportSize();
+      return {
+        x: -t.tx / t.s,
+        y: -t.ty / t.s,
+        width: v.vw / t.s,
+        height: v.vh / t.s
+      };
+    }
 
+    function fitBounds(rect /* , immediately */) {
+      // Solve for (s, tx, ty) such that the given image-pixel rect fills the
+      // viewport, centered. `immediately` is accepted for API compatibility
+      // but ignored — 0.5.x has no animation system.
+      if (!rect || rect.width <= 0 || rect.height <= 0) return;
+      var v = controller.getViewportSize();
+      var newS = Math.min(v.vw / rect.width, v.vh / rect.height);
+      var newTx = (v.vw - newS * rect.width) / 2 - newS * rect.x;
+      var newTy = (v.vh - newS * rect.height) / 2 - newS * rect.y;
+      controller.setTransform(newTx, newTy, newS);
+    }
+
+    return {
+      container: el,
+
+      imageToScreen: imageToScreen,
+      screenToImage: screenToImage,
+      getViewportBounds: getViewportBounds,
+      fitBounds: fitBounds,
+      setSource: function(url) { controller.setSource(url); },
       swapSourcePreservingBounds: function(url) {
-        swapSourcePreservingBounds(viewer, url);
+        controller.swapSourcePreservingBounds(url);
       },
 
       on: bus.on,
-
-      // Internal: synchronous broadcast to subscribers. Bridges to OSD
-      // events use this directly via the local `bridge` helper; the
-      // fast-pan module (installed by the hook when `:pan_optimized` is
-      // set) uses it to emit `fast-pan` events outside the OSD-handler
-      // chain. Consumers should never call this — they listen via
-      // `on(name, fn)` and the emit side is owned by Fresco's internals.
       _emit: bus._emit,
 
-      // Append a button to Fresco's nav column (below the existing four:
-      // zoom-in, zoom-out, reset, fullscreen). Used by extensions like
-      // Etcher to add tool toggles. Returns an unsubscribe function that
-      // removes the button on cleanup. The returned function carries a
-      // few helpers as properties for callers that want to mutate the
-      // button after creation (.setIcon, .setTitle, .el). See
-      // attachNavButton for the shared implementation.
       appendNavButton: function(svg, title, onClick) {
-        return attachNavButton(navEl, svg, title, onClick);
+        return attachNavButton(controller.navEl, svg, title, onClick);
       }
     };
   }
 
   // ===========================================================================
-  // Strip handle — exposed by Fresco.scrollStripFor(domId) / onViewerReady.
+  // FrescoViewer LiveView hook
+  // ===========================================================================
+
+  window.FrescoHooks = window.FrescoHooks || {};
+
+  window.FrescoHooks.FrescoViewer = {
+    mounted: function() {
+      injectStyles();
+      var controller = mountFrescoViewer(this.el);
+      if (!controller) return;
+      this.controller = controller;
+      var handle = makeViewerHandle(controller);
+      this.handle = handle;
+      publishReady(this.el.id, handle);
+    },
+
+    updated: function() {
+      if (!this.controller) return;
+      var next = this.el.dataset.src;
+      if (next && next !== this.controller.getCurrentSrc()) {
+        this.controller.swapSourcePreservingBounds(next);
+      }
+    },
+
+    destroyed: function() {
+      if (this.el && this.el.id) unpublish(this.el.id);
+      if (this.controller) {
+        try { this.controller.teardown(); } catch (_) {}
+        this.controller = null;
+      }
+      this.handle = null;
+    }
+  };
+
+  // ===========================================================================
+  // Strip handle — unchanged from 0.4.x (the strip component was already lite).
   //
-  // Surface mirrors `makeHandle` where it makes sense (`container`, `on`,
+  // Surface mirrors the viewer handle where it makes sense (`container`, `on`,
   // `_emit`, `appendNavButton`) and replaces the rest with strip-native
   // methods:
   //
@@ -826,15 +1088,6 @@
   //   handle.imageToScreen({imageIdx, x, y})    — coords are per-image
   //   handle.screenToImage({x, y}) → {imageIdx, x, y}
   //   handle.getScrollState()                   — strip equivalent of bounds
-  //
-  // `handle.openSeadragon` is intentionally a throwing getter — strip mode
-  // has no OSD, and accessing it usually means an overlay was written for the
-  // viewer host without an adapter. The error message points at the fix.
-  //
-  // The strip handle gets its event emissions from the scroll bridge inside
-  // the FrescoScrollStrip hook (not from this factory) — by the time the
-  // hook calls `publishReady(...)`, the events the bridge will fire later
-  // already have a subscriber list via `bus.on`.
   // ===========================================================================
 
   function makeStripHandle(container, sources, opts) {
@@ -843,7 +1096,6 @@
 
     var bus = createEventBus();
 
-    // Find the <img> for a given image index (set up by the hook).
     function imgAt(idx) {
       if (!container) return null;
       return container.querySelector(
@@ -851,8 +1103,6 @@
       );
     }
 
-    // Compute the scroll offset (within the container) that puts image `idx`
-    // flush to the top, plus an optional `y` pixel offset within the image.
     function scrollTopFor(idx, y) {
       var img = imgAt(idx);
       if (!img) return null;
@@ -871,7 +1121,6 @@
       try {
         container.scrollTo({ top: top, behavior: behavior });
       } catch (_) {
-        // Safari < 14 / older browsers don't accept the options form.
         container.scrollTop = top;
       }
     }
@@ -893,9 +1142,6 @@
       var img = imgAt(idx);
       if (!img) return { x: 0, y: 0 };
       var rect = img.getBoundingClientRect();
-      // Image coords are in source pixels; map to displayed pixels by
-      // multiplying by the displayed-to-natural width ratio. Height ratio
-      // is the same since `aspect-ratio` preserves it.
       var scale = rect.width / (sources[idx] && sources[idx].width ? sources[idx].width : rect.width);
       return {
         x: rect.left + (pt.x || 0) * scale,
@@ -907,7 +1153,6 @@
       pt = pt || {};
       var px = typeof pt.x === "number" ? pt.x : 0;
       var py = typeof pt.y === "number" ? pt.y : 0;
-      // Hit-test which image the screen point is over.
       for (var i = 0; i < sources.length; i++) {
         var img = imgAt(i);
         if (!img) continue;
@@ -921,7 +1166,6 @@
           };
         }
       }
-      // Above all / below all — return the nearest edge.
       return { imageIdx: py < 0 ? 0 : sources.length - 1, x: 0, y: 0 };
     }
 
@@ -953,18 +1197,17 @@
       }
     };
 
-    // `openSeadragon` throws on access — Etcher's renderer adapter and any
-    // other overlay should feature-detect via `"scrollTo" in handle` (or
-    // `"openSeadragon" in handle`, which IS true here because the getter
-    // exists, but reading it throws). The error message points at the fix.
+    // Throwing getter: anything that pokes `handle.openSeadragon` on a strip
+    // handle is almost certainly an overlay written against an older Fresco.
+    // The error message points at the fix — 0.5.x removed OSD entirely.
     Object.defineProperty(handle, "openSeadragon", {
       get: function() {
         throw new Error(
-          "[Fresco] handle.openSeadragon is not available on Fresco.scrollStrip " +
-          "(strip mode has no OpenSeadragon viewer). Use feature detection " +
-          "(`\"scrollTo\" in handle` for strip; `\"openSeadragon\" in handle` " +
-          "is true for both, but only the viewer's getter resolves). For " +
-          "OSD-backed features, use Fresco.viewer instead."
+          "[Fresco] handle.openSeadragon is gone in 0.5.x — Fresco no longer " +
+          "wraps OpenSeadragon. Update overlays to use coordinate adapters " +
+          "(`handle.imageToScreen`/`handle.screenToImage`) and event hooks " +
+          "(`handle.on(\"zoom\"|\"pan\"|\"animation\", …)`), or attach as a " +
+          "child of `.fresco-stage` to inherit the transform for free."
         );
       },
       configurable: false
@@ -974,155 +1217,12 @@
   }
 
   // ===========================================================================
-  // FrescoViewer LiveView hook
-  // ===========================================================================
-
-  window.FrescoHooks = window.FrescoHooks || {};
-
-  window.FrescoHooks.FrescoViewer = {
-    mounted: function() {
-      var self = this;
-      loadOSD(function() {
-        if (!self.el.isConnected) return;
-
-        var src = self.el.dataset.src;
-        var sourcesJson = self.el.dataset.sources;
-        var multiSources = parseSourcesJson(sourcesJson);
-
-        if (!multiSources && !src) {
-          console.warn(
-            "[Fresco] Element has neither data-src nor a valid data-sources payload",
-            self.el
-          );
-          return;
-        }
-
-        // Track both shapes for the `updated` hook: live re-renders
-        // may swap either single-source or multi-source payloads.
-        self.currentSrc = src;
-        self.currentSourcesJson = multiSources ? sourcesJson : null;
-
-        // Infinite-canvas mode: caller asked for unclamped pan/zoom so
-        // overlays (e.g. Etcher annotations) can extend beyond the
-        // image into the surrounding void. Off by default — every
-        // existing consumer keeps the stock "image fills viewport"
-        // clamps.
-        var infiniteCanvas = self.el.dataset.infiniteCanvas === "true";
-        var rotateEnabled = self.el.dataset.rotate === "true";
-
-        // data-sources wins when present, otherwise the legacy
-        // single-image data-src path. resolveTileSource still flows
-        // through provider chain for both.
-        var tileSources = multiSources || resolveTileSource(src);
-
-        self.viewer = window.OpenSeadragon({
-          element: self.el,
-          tileSources: tileSources,
-
-          // Our Heroicons overlay replaces the built-in PNG-sprite nav.
-          showNavigationControl: false,
-
-          // Snappier than defaults (1.2s / 6.5) — tracks user input directly
-          // without going fully instant.
-          animationTime: 0.3,
-          springStiffness: 10,
-
-          // Reasonable headroom past native resolution for any consumer.
-          // Extensions like Tessera can override per-layer if they want
-          // tighter bounds.
-          maxZoomPixelRatio: 8,
-
-          // Clamp the image to the viewer rectangle — no off-screen drift,
-          // no half-image floating in empty space. Infinite-canvas mode
-          // releases both clamps and lowers the zoom-out floor so the
-          // image can shrink to a thumbnail in the middle of empty
-          // canvas.
-          visibilityRatio: infiniteCanvas ? 0 : 1.0,
-          constrainDuringPan: !infiniteCanvas,
-          minZoomImageRatio: infiniteCanvas ? 0.05 : 0.9,
-
-          gestureSettingsTouch: { pinchToZoom: true, dragToPan: true },
-          gestureSettingsMouse: {
-            scrollToZoom: true,
-            dragToPan: true,
-            // Single-click should select / annotate, not zoom. Zooming
-            // by mouse is double-click (here) or scroll wheel.
-            clickToZoom: false,
-            dblClickToZoom: true
-          }
-        });
-
-        // Built-in nav overlay (zoom in/out/home/fullscreen, plus
-        // optional rotate when the host opted in).
-        self.nav = buildNav(self.viewer, self.el, { rotate: rotateEnabled });
-
-        // Publish the handle so extensions can attach. The nav element is
-        // passed through so extensions can append their own buttons via
-        // `handle.appendNavButton(...)`.
-        self.handle = makeHandle(self.viewer, self.el, self.nav);
-        publishReady(self.el.id, self.handle);
-
-        // Opt-in CSS-transform fast path for pure-pan motion. Installs
-        // a pan interceptor that swaps OSD's drawer for a no-op during
-        // the gesture, applies `transform: translate3d` to the canvas
-        // per frame, and emits a `fast-pan` event so overlays (Etcher)
-        // can transform in lockstep. See README "Optimized pan for
-        // long-scroll content" for the full contract.
-        if (self.el.dataset.panOptimized === "true") {
-          installFastPan(self.viewer, self.handle, !!rotateEnabled);
-        }
-      });
-    },
-
-    updated: function() {
-      if (!this.viewer) return;
-
-      // Multi-source swap takes precedence: if data-sources changed,
-      // re-open with the new layout while preserving the current
-      // viewport (same bounds-preservation trick as single-source).
-      var newSourcesJson = this.el.dataset.sources;
-      if (newSourcesJson && newSourcesJson !== this.currentSourcesJson) {
-        var tileSources = parseSourcesJson(newSourcesJson);
-        if (tileSources) {
-          this.currentSourcesJson = newSourcesJson;
-          var keepBounds = this.viewer.viewport.getBounds();
-          var viewer = this.viewer;
-          viewer.addOnceHandler("open", function() {
-            try { viewer.viewport.fitBounds(keepBounds, true); } catch (_) {}
-          });
-          try { viewer.open(tileSources); } catch (_) {}
-          return;
-        }
-      }
-
-      var newSrc = this.el.dataset.src;
-      if (newSrc && newSrc !== this.currentSrc) {
-        this.currentSrc = newSrc;
-        swapSourcePreservingBounds(this.viewer, newSrc);
-      }
-    },
-
-    destroyed: function() {
-      if (this.el && this.el.id) unpublish(this.el.id);
-      if (this.nav && this.nav.parentNode) {
-        this.nav.parentNode.removeChild(this.nav);
-      }
-      this.nav = null;
-      if (this.viewer) {
-        try { this.viewer.destroy(); } catch (_) {}
-        this.viewer = null;
-      }
-    }
-  };
-
-  // ===========================================================================
   // FrescoScrollStrip LiveView hook
   //
   // Native browser scroll on DOM <img> elements (one per source), with
   // memory windowing so off-screen images get their `src` evicted to free
   // decoded-image memory. The component server-renders the entire DOM —
-  // this hook only attaches scroll handlers, an IntersectionObserver, and
-  // the strip handle.
+  // this hook only attaches scroll handlers and the strip handle.
   // ===========================================================================
 
   window.FrescoHooks.FrescoScrollStrip = {
@@ -1131,10 +1231,7 @@
       var container = self.el;
       if (!container) return;
 
-      // The component server-rendered the data-sources payload as JSON; we
-      // need it client-side to drive scrollTo math, image-coord conversion,
-      // and the evict/restore pipeline. Fail fast (with a console warn) if
-      // it's missing or malformed — the consumer's view is broken.
+      // The component server-rendered the data-sources payload as JSON.
       var sourcesJson = container.dataset.sources;
       var sources;
       try {
@@ -1150,29 +1247,16 @@
       var windowBefore = parseInt(container.dataset.windowBefore || "1", 10);
       var windowAfter = parseInt(container.dataset.windowAfter || "3", 10);
 
-      // Track which image is currently dominant (by intersection ratio) so
-      // viewport-change only emits on actual changes, not on every scroll
-      // tick. fractionWithin = how far through that image the viewport top is.
       var state = { currentImageIdx: 0, fractionWithin: 0 };
 
-      // Build the handle BEFORE wiring the scroll bridge so the bridge can
-      // emit via handle._emit, and consumers that subscribe in onViewerReady
-      // see all events (including the initial open + viewport-change).
       var handle = makeStripHandle(container, sources, {
-        navEl: null, // strip mode is bare by default; consumers use appendNavButton
+        navEl: null,
         getState: function() { return state; }
       });
       self.handle = handle;
       self.sources = sources;
 
-      // ---- Memory windowing ---------------------------------------------------
-      //
-      // The component renders every <img> with `src` set so the strip is
-      // usable without JS. Once we mount, we evict offscreen images and
-      // restore them on re-entry to keep decoded-image memory bounded.
-      // `aspect-ratio` (set in inline style by the component) keeps the
-      // layout stable through evict/restore — removing `src` doesn't
-      // collapse the slot.
+      // ---- Memory windowing -------------------------------------------------
 
       var allImgs = Array.from(
         container.querySelectorAll("[data-fresco-strip-img]")
@@ -1185,12 +1269,10 @@
           var img = allImgs[i];
           var idx = parseInt(img.dataset.imageIdx, 10);
           if (idx >= lo && idx <= hi) {
-            // Restore if we previously evicted.
             if (!img.src && img.dataset.src) {
               img.src = img.dataset.src;
             }
           } else {
-            // Evict. Stash the URL so we can restore later.
             if (img.src) {
               if (!img.dataset.src) img.dataset.src = img.src;
               img.removeAttribute("src");
@@ -1200,7 +1282,6 @@
         }
       }
 
-      // Fire image-loaded on every load event (including restored evictions).
       function onImgLoad(e) {
         var img = e.target;
         if (!img || !img.dataset) return;
@@ -1211,11 +1292,7 @@
         img.addEventListener("load", onImgLoad);
       });
 
-      // ---- Scroll bridge ------------------------------------------------------
-      //
-      // Native scroll → rAF-coalesced handler that computes the dominant
-      // image (highest intersection ratio with viewport) and emits the
-      // scroll + viewport-change events the handle exposes.
+      // ---- Scroll bridge ----------------------------------------------------
 
       var pendingScroll = false;
 
@@ -1235,8 +1312,6 @@
             bestIdx = idx;
           }
         }
-        // fractionWithin = how far through the dominant image the
-        // viewport-top is. 0 = top edge; 1 = bottom edge of that image.
         var dominantImg = allImgs.find(function(img) {
           return parseInt(img.dataset.imageIdx, 10) === bestIdx;
         });
@@ -1263,7 +1338,6 @@
             currentImageIdx: state.currentImageIdx,
             fractionWithin: state.fractionWithin
           });
-          // Re-window memory around the new center.
           evictOutsideWindow(state.currentImageIdx);
         } else {
           state.fractionWithin = next.fractionWithin;
@@ -1277,11 +1351,7 @@
       };
       container.addEventListener("scroll", self._onScroll, { passive: true });
 
-      // ---- Server-pushed scroll ----------------------------------------------
-      //
-      // Consumers can push `phx:scroll-to` from their LiveView (e.g., for
-      // chapter-resume restoration or programmatic snapping) with payload
-      // `{imageIdx, y, behavior}` — we forward straight to handle.scrollTo.
+      // ---- Server-pushed scroll --------------------------------------------
 
       self._onServerScroll = function(payload) {
         handle.scrollTo(payload || {});
@@ -1290,10 +1360,7 @@
         self.handleEvent("phx:scroll-to", self._onServerScroll);
       }
 
-      // ---- Mount sequencing ---------------------------------------------------
-      //
-      // Compute initial dominant image, evict the rest, publish the handle,
-      // fire one viewport-change so overlays have a baseline, then fire open.
+      // ---- Mount sequencing -------------------------------------------------
 
       var initial = computeDominantImage();
       state.currentImageIdx = initial.currentImageIdx;
@@ -1310,11 +1377,8 @@
     },
 
     updated: function() {
-      // For now, sources are immutable after mount. If the consumer
-      // re-renders with a different :sources list, the simplest thing is
-      // for them to change the `:id` of the component so LiveView remounts
-      // the hook — same pattern as <Fresco.viewer>'s data-src/data-sources
-      // pre-0.1.1 (before swapSourcePreservingBounds existed).
+      // Sources are immutable after mount. Consumers who need to swap should
+      // change the component's `:id` to trigger a remount.
     },
 
     destroyed: function() {

@@ -3,19 +3,18 @@ defmodule Fresco do
   Fresco is a polished pan-zoom image viewer for Phoenix apps.
 
   The metaphor: a *fresco* is the wet-plaster surface you paint on. Fresco
-  the library is the surface every layered image experience sits on top of —
-  the deep-zoom tile pyramid (Tessera), the annotation tools (Etcher,
-  forthcoming), the future ML / measurement / OCR overlays — all of them
-  attach to the same Fresco viewer instance.
+  the library is the surface every layered image experience sits on top of
+  — annotation tools, ML overlays, measurement widgets, and so on. They
+  attach to the same Fresco viewer instance through a small extension
+  registry.
 
   Used on its own, Fresco is a complete viewer: pan, zoom (wheel, pinch,
-  buttons, keyboard), fit-to-view, fullscreen, Heroicon nav overlay,
-  viewport clamped so the image can't be panned off-screen, smooth
-  animations tuned for "snappy but not jarring".
+  buttons, keyboard), fit-to-view, fullscreen, Heroicons nav overlay,
+  smooth gestures on mobile.
 
   Used as a host for extensions, Fresco exposes a coordinate adapter,
   event pub/sub, and a small extension registry so peer libraries can
-  attach by `id` without needing to fork the viewer.
+  attach by DOM id without needing to fork the viewer.
 
   ## Quick start
 
@@ -35,11 +34,15 @@ defmodule Fresco do
         handle.swapSourcePreservingBounds("/path/to/different-source");
       });
 
-  Source providers transform a URL into an OpenSeadragon tile source:
+  Annotation-style overlays can also attach as children of the
+  `.fresco-stage` element to inherit the transform automatically — no
+  per-frame coordinate math required for the common case.
+
+  Source providers transform a URL into a Fresco tile source:
 
       window.Fresco.registerSourceProvider(
-        function(url) { return url.endsWith(".dzi"); },
-        function(url) { return url; }   // OSD accepts a DZI URL directly
+        function(url) { return url.endsWith(".my-format"); },
+        function(url) { return { type: "image", url: rewrite(url) }; }
       );
 
   See `Fresco.Viewer` for the component reference, and `Fresco.ScrollStrip`
@@ -47,19 +50,20 @@ defmodule Fresco do
 
   ## Two component shapes
 
-  - **`<Fresco.viewer>`** — OpenSeadragon-backed pan/zoom for deep-zoom
-    imagery, museum scans, big single images. Use when the user is
-    panning *around* a single image and may want to zoom in.
+  - **`<Fresco.viewer>`** — pan/zoom for a single image. Hand-rolled
+    CSS-transform engine; native Pointer Events; smooth on iOS Safari.
+    Use when the user is panning *around* a single image and may want to
+    zoom in.
   - **`<Fresco.scroll_strip>`** — native DOM `<img>` + browser scroll for
     long-form vertical strips (manhwa, comics, IG feeds). Use when the
     user is reading by scrolling *through* a stack of images at one zoom
-    level. No canvas redraw per frame; native 60fps on mobile.
+    level.
 
   Both share the registry — `window.Fresco.onReady(domId, callback)` works
-  for either, and the handle each one yields exposes a partly-shared
-  surface (`container`, `on`, `appendNavButton`) plus its own kind-specific
-  methods (viewer: `imageToScreen` / `fitBounds` / OSD; strip: `scrollTo`
-  / `scrollBy` / `getScrollState`). Feature-detect with
+  for either, and the handle each yields exposes a partly-shared surface
+  (`container`, `on`, `appendNavButton`) plus its own kind-specific
+  methods (viewer: `imageToScreen` / `fitBounds`; strip: `scrollTo` /
+  `scrollBy` / `getScrollState`). Feature-detect with
   `"scrollTo" in handle` to dispatch between them.
   """
 

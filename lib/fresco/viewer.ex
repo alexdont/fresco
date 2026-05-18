@@ -2,11 +2,16 @@ defmodule Fresco.Viewer do
   @moduledoc """
   Phoenix LiveView function component that mounts a Fresco viewer.
 
-  Renders a `<div>` with `phx-hook="FrescoViewer"`. The companion JS hook
-  in `priv/static/fresco.js` lazy-loads OpenSeadragon from jsDelivr,
-  initializes the viewer with sensible defaults (smooth animations,
-  viewport clamped, Heroicons nav overlay), and publishes a handle to
-  `window.Fresco.viewerFor(id)` so peer extensions can attach.
+  Renders a host `<div>` containing a stage `<div>` and an `<img>`. The
+  companion JS hook (`FrescoViewer` in `priv/static/fresco.js`) attaches
+  Pointer Events for unified mouse/touch/pen gestures, applies
+  `transform: translate3d(tx, ty, 0) scale(s)` on the stage element, and
+  publishes a handle to `window.Fresco.viewerFor(id)` so peer extensions
+  (Tessera, future Etcher) can attach.
+
+  The image is server-rendered inside the host so it appears immediately —
+  the hook reads `naturalWidth/Height` on mount and fits the image into
+  the viewport without any "blank box" flash.
 
   ## Usage
 
@@ -16,22 +21,17 @@ defmodule Fresco.Viewer do
         class="w-full h-[80vh] rounded"
       />
 
-  ## Source detection
-
-  The default behavior treats `src` as a plain image URL. Extensions can
-  register source providers via `window.Fresco.registerSourceProvider/2`
-  to handle other formats (e.g., a DZI manifest URL via Tessera).
-
   ## Interactions
 
-  Wheel-zoom, pinch-zoom, click-drag pan, double-click zoom, Heroicons
-  nav buttons (zoom in / zoom out / reset / fullscreen). All work out of
-  the box; no parent configuration needed.
+  - **Pan**: click/touch drag, arrow keys (after focusing the viewer)
+  - **Zoom**: mouse wheel (centered on cursor), pinch (two-finger on touch
+    or trackpad), double-click (2× centered on cursor), `+`/`-` keys
+  - **Reset**: nav button, `0` key — fits the image to the viewport
+  - **Fullscreen**: nav button, `f` key — toggles native browser fullscreen
 
   ## Parent app setup
 
-  Import the JS hook and spread `FrescoHooks` into your LiveSocket
-  hooks:
+  Import the JS hook and spread `FrescoHooks` into your LiveSocket hooks:
 
       import "../../deps/fresco/priv/static/fresco.js"
 
@@ -45,47 +45,15 @@ defmodule Fresco.Viewer do
   attr(:id, :string, required: true, doc: "DOM id; must be unique on the page.")
 
   attr(:src, :string,
-    default: nil,
+    required: true,
     doc: """
-    URL of a single image to display — shortcut for one-image viewers.
-    Treated as a plain image (`.jpg`, `.png`, `.webp`, etc.) by default;
-    source providers registered via `window.Fresco.registerSourceProvider/2`
-    can intercept specific URL patterns (e.g., Tessera handles `.dzi`
-    manifests).
+    URL of the image to display.
 
-    Exactly one of `:src` or `:sources` is required. If both are
-    given, `:sources` wins and `:src` is ignored.
-    """
-  )
-
-  attr(:sources, :list,
-    default: [],
-    doc: """
-    List of images to lay out on a shared canvas. Each entry is a map:
-
-        %{
-          src: "/uploads/a.jpg",   # required — image URL
-          x: 0.0,                  # optional — horizontal offset in viewport units (default 0)
-          y: 0.0,                  # optional — vertical offset in viewport units (default 0)
-          width: 1.0               # optional — width in viewport units (default 1)
-        }
-
-    Viewport units: the *first* image is conventionally placed at
-    `x: 0, y: 0` with `width: 1`. So `x: 1.1` puts the next image just
-    to the right with a 10% gap. Height is derived from the image's
-    natural aspect ratio — you don't specify it.
-
-    Each entry's `src` runs through the same source-provider chain as
-    the single-image `:src`, so a multi-image viewer can mix plain
-    images with DZI tile pyramids handled by Tessera.
-
-    Typically paired with `:infinite_canvas` so the user can pan
-    freely across the layout. Without it, OSD will fit-to-viewport
-    over the bounding box of all sources at mount.
-
-    Note: `handle.imageToScreen` / `screenToImage` currently operate
-    on the first source only. Multi-image coordinate disambiguation
-    is planned but not yet implemented.
+    The default behavior treats `src` as a plain image URL. Extensions can
+    register source providers via `window.Fresco.registerSourceProvider/2`
+    to intercept specific URL patterns; the bundled engine handles
+    `{type: "image"}` sources and throws a clear error for anything else
+    (Tessera-style tile sources are planned for a later release).
     """
   )
 
@@ -94,63 +62,17 @@ defmodule Fresco.Viewer do
   attr(:infinite_canvas, :boolean,
     default: false,
     doc: """
-    When `true`, drops OSD's "keep the image filling the viewport" clamps
-    so the user can pan freely beyond the image edges and zoom out until
-    the image is a thumbnail in the middle of an empty canvas. The viewer
-    background picks up a subtle dot-grid pattern in the void so it
-    reads as "canvas," not "broken layout." Default `false` preserves
-    the stock single-image viewer behavior — every existing call site
-    keeps working unchanged.
+    When `true`, drops the default "image must cover viewport" clamp so the
+    user can pan freely beyond the image edges and zoom out until the image
+    is a thumbnail in the middle of an empty canvas. The viewer's
+    background dot-grid (always present) becomes visible in the void around
+    the image so it reads as "canvas," not "broken layout." Default
+    `false` keeps the stock single-image viewer behavior — pan stays
+    location-locked inside the image, zoom-out floor is fit-to-viewport.
 
-    Layered overlays (e.g. Etcher) can draw annotations in the void
-    around the image because their coordinate math already supports
-    out-of-bounds image-pixel values.
-
-    Pairs naturally with `:sources` to lay multiple images out on
-    the same canvas, Figma/Miro style.
-    """
-  )
-
-  attr(:rotate, :boolean,
-    default: false,
-    doc: """
-    When `true`, appends a fifth button to the nav overlay that rotates
-    the image 90° clockwise on each click. Rotation persists across
-    "Reset view" — it's tracked independently of zoom/pan. Default
-    `false` keeps the four-button stock nav layout. Opt-in like
-    `:infinite_canvas` so existing consumers aren't surprised by an
-    extra button.
-    """
-  )
-
-  attr(:pan_optimized, :boolean,
-    default: false,
-    doc: """
-    When `true`, applies a CSS-transform fast path during pure-pan
-    motion so the canvas doesn't repaint per frame. Drops per-frame
-    cost from ~10–20ms to <1ms on iOS Safari — measurably smoother for
-    long-scroll reading (manhwa, comics, document viewers) where the
-    user is scrolling, not zooming.
-
-    How it works: on pan-start, Fresco swaps OSD's drawer for a no-op
-    and starts emitting a synthetic `fast-pan` event in three phases
-    (`start`, `delta`, `end`). Per frame, instead of redrawing the
-    canvas, the hook applies a GPU-composited `transform: translate3d`
-    to OSD's canvas element so the existing pixels glide. On pan-end
-    (or zoom-change / overscan bail), the transform is cleared and
-    OSD's drawer is restored, repainting once at the new position.
-
-    Opt-in (defaults `false`) because the synthetic `fast-pan` event
-    is a new public surface that overlay extensions need to handle in
-    order to stay aligned with the canvas during the transform
-    window. Etcher >= 0.2.8 listens automatically (its SVG overlay
-    transforms in lockstep); older Etcher versions will see
-    annotations visibly drift during pan. Consumers without overlays
-    can opt in unconditionally.
-
-    Bails to the normal redraw path if zoom changes mid-pan or the
-    rotation feature (`:rotate`) is active — both invalidate the
-    simple translate math.
+    Pairs naturally with future layered overlays (e.g. Etcher annotations)
+    that need to draw shapes, callouts, or labels in the white space
+    around the image, Figma/Miro/Excalidraw style.
     """
   )
 
@@ -166,69 +88,43 @@ defmodule Fresco.Viewer do
     - `:dark` — force dark palette regardless of OS preference.
     - `:inherit` — emit only the host structure; the parent app's CSS
       supplies the six `--fresco-*` custom properties. Use this to wire
-      Fresco to a parent theme system (daisyUI, custom palettes, …) so
-      its background, grid, and nav follow the parent theme. The
-      variables flip automatically as the parent theme changes.
+      Fresco to a parent theme system (daisyUI, custom palettes, …).
 
     Theming is implemented as CSS custom properties on `.fresco-viewer`
     (`--fresco-bg`, `--fresco-grid-dot`, `--fresco-nav-bg`,
     `--fresco-nav-bg-hover`, `--fresco-nav-fg`, `--fresco-nav-focus`).
-    With `:system`/`:light`/`:dark`, Fresco supplies the values. With
-    `:inherit`, the parent app does — see the Theming section of the
-    README for the daisyUI mapping example.
     """
   )
 
   attr(:rest, :global)
 
   @doc """
-  Renders a Fresco viewer for the given image source(s).
+  Renders a Fresco viewer for the given image source.
 
-  Companion JS hook lazy-loads OpenSeadragon, mounts the viewer, attaches
-  the nav overlay, and publishes the handle for peer extensions.
+  Companion JS hook attaches gesture handlers, fits the image to the
+  viewport, and publishes the handle for peer extensions.
   """
   def viewer(assigns) do
-    assigns =
-      assigns
-      |> validate_sources!()
-      |> assign_sources_json()
-
     ~H"""
     <div
       id={@id}
       phx-hook="FrescoViewer"
       phx-update="ignore"
       data-src={@src}
-      data-sources={@sources_json}
       data-infinite-canvas={to_string(@infinite_canvas)}
-      data-rotate={to_string(@rotate)}
-      data-pan-optimized={to_string(@pan_optimized)}
       data-fresco-theme={to_string(@theme)}
       class={[
         "fresco-viewer",
         @class,
         @infinite_canvas && "fresco-viewer--infinite"
       ]}
+      tabindex="0"
       {@rest}
     >
+      <div class="fresco-stage" data-fresco-stage>
+        <img src={@src} alt="" draggable="false" data-fresco-img />
+      </div>
     </div>
     """
-  end
-
-  defp validate_sources!(%{src: nil, sources: []}) do
-    raise ArgumentError,
-          "Fresco.viewer requires either :src (single image) or a non-empty :sources list"
-  end
-
-  defp validate_sources!(assigns), do: assigns
-
-  # JSON-encoded only when :sources is non-empty; otherwise nil so the
-  # data-sources attribute is omitted from the rendered div and the JS
-  # hook falls back to data-src.
-  defp assign_sources_json(%{sources: []} = assigns),
-    do: Phoenix.Component.assign(assigns, :sources_json, nil)
-
-  defp assign_sources_json(%{sources: sources} = assigns) do
-    Phoenix.Component.assign(assigns, :sources_json, Jason.encode!(sources))
   end
 end

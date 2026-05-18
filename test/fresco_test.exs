@@ -5,7 +5,7 @@ defmodule FrescoTest do
   import Phoenix.LiveViewTest
 
   describe "Fresco.viewer/1" do
-    test "renders a div with the FrescoViewer hook and data-src" do
+    test "renders the host div with the FrescoViewer hook and data-src" do
       html =
         render_component(&Fresco.viewer/1,
           id: "test-viewer",
@@ -22,6 +22,29 @@ defmodule FrescoTest do
       # `infinite_canvas` defaults to false; the modifier class
       # should NOT be on the host in stock mode.
       refute html =~ "fresco-viewer--infinite"
+    end
+
+    test "renders the .fresco-stage div inside the host" do
+      html = render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg")
+      # The stage is the transformed surface. The hook reads it via
+      # [data-fresco-stage]; the class hooks the CSS rules.
+      assert html =~ ~s(class="fresco-stage")
+      assert html =~ "data-fresco-stage"
+    end
+
+    test "server-renders the <img> inside the stage with the given src" do
+      html = render_component(&Fresco.viewer/1, id: "v", src: "/uploads/cat.jpg")
+      # No JS flash before mount: the image is in the DOM as soon as
+      # the markup hits the page. `draggable=false` keeps the browser
+      # from initiating its own drag-image ghost.
+      assert html =~ ~s(src="/uploads/cat.jpg")
+      assert html =~ ~s(draggable="false")
+      assert html =~ "data-fresco-img"
+    end
+
+    test "host carries tabindex=0 so keyboard handlers fire after focus" do
+      html = render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg")
+      assert html =~ ~s(tabindex="0")
     end
 
     test "passes global attributes through :rest" do
@@ -59,41 +82,6 @@ defmodule FrescoTest do
       html = render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg", infinite_canvas: true)
       assert html =~ "fresco-viewer--infinite"
       assert html =~ ~s(data-infinite-canvas="true")
-    end
-
-    test "rotate flips the data-rotate attribute on the host" do
-      html = render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg", rotate: true)
-      assert html =~ ~s(data-rotate="true")
-    end
-
-    test "sources renders a JSON payload on data-sources" do
-      html =
-        render_component(&Fresco.viewer/1,
-          id: "v",
-          sources: [%{src: "/a.jpg"}, %{src: "/b.jpg", x: 1.1}]
-        )
-
-      assert html =~ ~s(data-sources=)
-      # Two source entries serialized in order; presence checks are
-      # enough — JS hook is the contract for the exact shape.
-      assert html =~ ~s(/a.jpg)
-      assert html =~ ~s(/b.jpg)
-    end
-
-    test "pan_optimized defaults to false on the host" do
-      html = render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg")
-      assert html =~ ~s(data-pan-optimized="false")
-    end
-
-    test "pan_optimized=true plumbs through to the host" do
-      html = render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg", pan_optimized: true)
-      assert html =~ ~s(data-pan-optimized="true")
-    end
-
-    test "raises ArgumentError when both :src and :sources are missing" do
-      assert_raise ArgumentError, ~r/requires either :src/, fn ->
-        render_component(&Fresco.viewer/1, id: "v")
-      end
     end
   end
 

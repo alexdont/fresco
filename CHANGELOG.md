@@ -4,6 +4,97 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.0 — <today's date>
+
+Full rewrite of `<Fresco.viewer>`. **OpenSeadragon is gone.** The viewer is
+now a hand-rolled ~500-line CSS-transform pan/zoom engine, built
+specifically for the manga/manhwa-reader use case where iOS Safari
+smoothness matters more than tile-pyramid deep zoom. Single `<img>` lives
+inside a stage div; `transform: translate3d(tx, ty, 0) scale(s)` on the
+stage handles all motion. Native Pointer Events drive gestures; native
+Fullscreen API handles fullscreen. Zero external JS deps, no CDN load.
+
+`<Fresco.scroll_strip>` is unchanged — it was already lite (native DOM
+`<img>` + browser scroll, no canvas).
+
+### Why a rewrite, not a tweak
+
+OSD shipped ~150 KB of canvas-redraw machinery for a problem the library
+no longer prioritizes. The `pan_optimized` fast path in 0.3.x was a
+workaround for the same root cause that's gone now: no canvas, no spring
+math, no per-frame redraw. Pan and zoom are a single GPU-composited
+transform on a stage div. Pinch on iOS works because PointerEvents handle
+two-pointer gestures natively — no OSD touch shim in the way.
+
+### Removed
+
+- **OpenSeadragon.** The library no longer fetches or wraps it.
+- **`handle.openSeadragon` / `handle.viewer`** (the escape hatch into OSD).
+  No shim — overlays that reached into OSD must migrate to coordinate
+  adapters and event hooks.
+- **`:sources` attr** — single-source only in 0.5. A future minor version
+  may reintroduce multi-image layout as an additive attr.
+- **`:rotate` attr** — additive comeback later.
+- **`:pan_optimized` attr and the `fast-pan` event** — unnecessary now;
+  the lite engine is always CSS-transform-based.
+- **DZI / tile-source support** via the default
+  `registerSourceProvider` flow. The registry still exists (and a future
+  Tessera update will use it), but plain image sources are the only
+  `type` the bundled engine knows. Other types throw a clear error.
+
+### Kept (compatible surface)
+
+- **`<Fresco.viewer id src class infinite_canvas theme>`** — same call
+  sites work. `src` is now required (was optional, falling back to
+  `:sources`).
+- **`window.Fresco.{viewerFor, scrollStripFor, onViewerReady, onReady, registerSourceProvider}`**.
+- **Viewer handle**: `container`, `imageToScreen`, `screenToImage`,
+  `getViewportBounds`, `fitBounds`, `setSource`,
+  `swapSourcePreservingBounds`, `on`, `_emit`, `appendNavButton`.
+  Coordinates return page-space, matching 0.4.x.
+- **Events**: `zoom`, `pan`, `open`, `resize`, `animation`,
+  `update-viewport`. Semantics are equivalent — `zoom`/`pan` fire on
+  gesture intent; `animation`/`update-viewport` fire on every transform
+  write.
+- **All `<Fresco.scroll_strip>` behavior** — strip mode is unchanged.
+- **Six `--fresco-*` CSS custom properties** + four theme modes.
+
+### Changed semantics
+
+- **`handle.getViewportBounds()`** now returns image-pixel coordinates
+  `{x, y, width, height}` directly. 0.4.x returned OSD's normalized
+  0–1 viewport rect (`OpenSeadragon.Rect`). Image-pixel coords are
+  what overlay code was converting to anyway, but this is a breaking
+  change for any consumer that was using the normalized form raw.
+- **`handle.fitBounds(rect, immediately)`** accepts an image-pixel rect.
+  The `immediately` flag is preserved for API compatibility but ignored
+  — 0.5.x has no animation system.
+
+### Intentionally cut from this release
+
+- **Momentum / inertia.** Skipped to ship fast. CSS-transform pan is
+  already smooth *during* the gesture; momentum is the post-release
+  glide. May come back in a later 0.x.
+- **Multi-image layout (`:sources`).** Can come back as an additive
+  attr.
+- **Rotation (`:rotate`).** Trivial to add back in the transform string.
+- **Tile-source providers other than "image".** The registry hook is in
+  place; Tessera-lite (when it lands) will register a `{type: "tiles", …}`
+  factory and the engine will switch on the `type` field.
+
+### Migration notes
+
+- Callers passing `:sources`, `:rotate`, or `:pan_optimized` will get
+  compile warnings (`Phoenix.Component` strict-attrs). Remove the
+  attrs; for `:sources`, fall back to a single `:src` for now.
+- Code reaching into `handle.openSeadragon` must be ported off to use
+  `imageToScreen` / `screenToImage` / `on(...)`. Annotation-style
+  overlays can also attach as children of `.fresco-stage` to inherit
+  the transform automatically, with no per-frame coordinate math.
+- Existing `tessera` (DZI) and (planned) `etcher` releases need
+  updates to track this version. Pin to `fresco ~> 0.4` until those
+  updates land if you depend on either.
+
 ## 0.4.0 — 2026-05-18
 
 New sibling component for long-scroll reading content:
