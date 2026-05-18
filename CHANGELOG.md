@@ -4,19 +4,39 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.5.1 — <today's date>
+## 0.5.0 — 2026-05-19
 
-New component: **`<Fresco.canvas>`** — a layered scene of N images
-positioned at absolute canvas-pixel coordinates, plus an open
-`extensions` map for annotation tools (future Etcher), ML overlays, and
-other peer packages. Serializes to a single `.fresco` JSON file so an
-entire scene lives in one place instead of scattered DB tables.
-Single-image is just the N=1 case.
+Full rewrite of `<Fresco.viewer>` plus a new companion component
+**`<Fresco.canvas>`**. **OpenSeadragon is gone.** The viewer is now a
+hand-rolled ~500-line CSS-transform pan/zoom engine, built specifically
+for the manga/manhwa-reader use case where iOS Safari smoothness
+matters more than tile-pyramid deep zoom. Single `<img>` lives inside
+a stage div; `transform: translate3d(tx, ty, 0) scale(s)` on the stage
+handles all motion. Native Pointer Events drive gestures; native
+Fullscreen API handles fullscreen. Zero external JS deps, no CDN load.
 
-The pan/zoom engine is shared with `<Fresco.viewer>` — same gestures,
-same smoothness, same `infinite_canvas`/`theme` semantics.
+`<Fresco.canvas>` is the new layered scene primitive: N images at
+absolute canvas-pixel coordinates plus an open `extensions` map for
+annotation tools ([Etcher](https://hex.pm/packages/etcher)), ML
+overlays, and other peer packages. Serializes to a single `.fresco`
+JSON file so an entire scene lives in one place instead of scattered
+DB tables. Single-image is just the N=1 case. Shares the new
+CSS-transform engine with the viewer — same gestures, same smoothness,
+same `infinite_canvas` / `theme` semantics.
 
-### Added
+`<Fresco.scroll_strip>` is unchanged — it was already lite (native DOM
+`<img>` + browser scroll, no canvas).
+
+### Why a rewrite, not a tweak
+
+OSD shipped ~150 KB of canvas-redraw machinery for a problem the library
+no longer prioritizes. The `pan_optimized` fast path in 0.3.x was a
+workaround for the same root cause that's gone now: no canvas, no spring
+math, no per-frame redraw. Pan and zoom are a single GPU-composited
+transform on a stage div. Pinch on iOS works because PointerEvents handle
+two-pointer gestures natively — no OSD touch shim in the way.
+
+### Added — `<Fresco.canvas>` component
 
 - **`Fresco.Canvas` Elixir module** — `defstruct` (`version`, `canvas`,
   `images`, `extensions`, `__extra__`), builders (`new/1`, `add_image/2`,
@@ -34,13 +54,11 @@ same smoothness, same `infinite_canvas`/`theme` semantics.
   positioned `<img>` tags. Each img carries `data-canvas-x/-y/-width`
   and optionally `-height` / `-z-index` so the JS engine can re-layout
   per frame.
-- **New JS hook `FrescoCanvas`** in `priv/static/fresco.js`. Reuses every
-  shared helper (`createEventBus`, `attachNavButton`, `injectStyles`,
-  `ICONS`, `buildNav`, registry) and the new internal
-  `createTransformEngine` (extracted from `mountFrescoViewer`'s
-  internals — the viewer's pan/zoom code path is unchanged in behavior).
-  Adds `mountFrescoCanvas` for N-image layout and `makeCanvasHandle` for
-  the extended handle surface.
+- **New JS hook `FrescoCanvas`** in `priv/static/fresco.js`. Reuses
+  every shared helper (`createEventBus`, `attachNavButton`,
+  `injectStyles`, `ICONS`, `buildNav`, registry) and the new internal
+  `createTransformEngine`. Adds `mountFrescoCanvas` for N-image layout
+  and `makeCanvasHandle` for the extended handle surface.
 - **Canvas handle additions** beyond the viewer handle:
   `getCanvasSize()`, `getImages()`, `imageBoundsFor(id)`, `fitImage(id)`,
   `getExtension(name)`. `imageToScreen` / `screenToImage` operate in
@@ -54,11 +72,11 @@ same smoothness, same `infinite_canvas`/`theme` semantics.
 - **Three-way component facade** — `Fresco.canvas/1` joins `viewer/1`
   and `scroll_strip/1` as a `defdelegate` on the `Fresco` module.
 
-### Internal refactor (no behavior change)
+### Internal refactor (no behavior change for the viewer)
 
 - **`createTransformEngine({el, stage, getNaturalSize, applyChildren,
-  infiniteCanvas})`** — shared pan/zoom/clamp/gesture pipeline extracted
-  from `mountFrescoViewer`. The viewer now passes
+  infiniteCanvas})`** — shared pan/zoom/clamp/gesture pipeline used by
+  both `mountFrescoViewer` and `mountFrescoCanvas`. The viewer passes
   `getNaturalSize = () => ({w: img.naturalWidth, h: img.naturalHeight})`
   and `applyChildren = (s) => { img.style.width = (iw*s)+"px"; ... }`;
   the canvas passes `getNaturalSize = () => ({w: canvas-width, h:
@@ -69,47 +87,13 @@ same smoothness, same `infinite_canvas`/`theme` semantics.
 
 Fresco is passive with respect to `extensions`. Updates flow consumer
 LiveView → `%Fresco.Canvas{}` in assigns → re-render. A peer package
-like the future Etcher reads its initial state via
-`handle.getExtension("etcher")` at mount, pushes annotation edits to its
-own LiveView, which calls `Fresco.Canvas.put_extension(canvas, "etcher",
-new_data)` and re-assigns. Fresco's handle is intentionally read-only
-for extensions — no `setExtension` method exists, so save timing never
-races with annotation updates across channels. The `.fresco` file is
-the single source of truth.
-
-### Notes
-
-- Etcher integration ships in a separate package release; Fresco 0.5.1
-  doesn't depend on it. The new `getExtension` / `imageBoundsFor` /
-  `getImages` handle methods are the API Etcher will consume.
-- Memory windowing for very large multi-image canvases (>10 images) is
-  deferred until a real call site needs it. The strip's evict/restore
-  trick doesn't map cleanly because canvas images can be anywhere; a
-  viewport-overlap heuristic will be added when needed.
-- `<Fresco.viewer>` is unchanged. Use the simpler component when you
-  just want pan/zoom over one image without a scene-document overhead.
-
-## 0.5.0 — <today's date>
-
-Full rewrite of `<Fresco.viewer>`. **OpenSeadragon is gone.** The viewer is
-now a hand-rolled ~500-line CSS-transform pan/zoom engine, built
-specifically for the manga/manhwa-reader use case where iOS Safari
-smoothness matters more than tile-pyramid deep zoom. Single `<img>` lives
-inside a stage div; `transform: translate3d(tx, ty, 0) scale(s)` on the
-stage handles all motion. Native Pointer Events drive gestures; native
-Fullscreen API handles fullscreen. Zero external JS deps, no CDN load.
-
-`<Fresco.scroll_strip>` is unchanged — it was already lite (native DOM
-`<img>` + browser scroll, no canvas).
-
-### Why a rewrite, not a tweak
-
-OSD shipped ~150 KB of canvas-redraw machinery for a problem the library
-no longer prioritizes. The `pan_optimized` fast path in 0.3.x was a
-workaround for the same root cause that's gone now: no canvas, no spring
-math, no per-frame redraw. Pan and zoom are a single GPU-composited
-transform on a stage div. Pinch on iOS works because PointerEvents handle
-two-pointer gestures natively — no OSD touch shim in the way.
+like Etcher reads its initial state via `handle.getExtension("etcher")`
+at mount, pushes annotation edits to its own LiveView, which calls
+`Fresco.Canvas.put_extension(canvas, "etcher", new_data)` and
+re-assigns. Fresco's handle is intentionally read-only for extensions
+— no `setExtension` method exists, so save timing never races with
+annotation updates across channels. The `.fresco` file is the single
+source of truth.
 
 ### Removed
 
@@ -179,6 +163,17 @@ two-pointer gestures natively — no OSD touch shim in the way.
 - Existing `tessera` (DZI) and (planned) `etcher` releases need
   updates to track this version. Pin to `fresco ~> 0.4` until those
   updates land if you depend on either.
+
+### Notes
+
+- Etcher 0.3+ ships in a separate package release and is the
+  reference consumer for `getExtension` / `imageBoundsFor` /
+  `getImages`. Fresco 0.5 doesn't depend on it.
+- Memory windowing for very large multi-image canvases (>10 images)
+  is deferred until a real call site needs it. The strip's
+  evict/restore trick doesn't map cleanly because canvas images can
+  be anywhere; a viewport-overlap heuristic will be added when
+  needed.
 
 ## 0.4.0 — 2026-05-18
 
