@@ -83,6 +83,28 @@ defmodule FrescoTest do
       assert html =~ "fresco-viewer--infinite"
       assert html =~ ~s(data-infinite-canvas="true")
     end
+
+    test "zoom_floor / zoom_ceiling / pan_locked default to omitted attrs (no behavior change)" do
+      html = render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg")
+      refute html =~ "data-zoom-floor"
+      refute html =~ "data-zoom-ceiling"
+      refute html =~ "data-pan-locked"
+    end
+
+    test "zoom_floor renders the data attribute" do
+      html = render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg", zoom_floor: 0.5)
+      assert html =~ ~s(data-zoom-floor="0.5")
+    end
+
+    test "zoom_ceiling renders the data attribute" do
+      html = render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg", zoom_ceiling: 4.0)
+      assert html =~ ~s(data-zoom-ceiling="4.0")
+    end
+
+    test "pan_locked=true renders data-pan-locked=\"true\"" do
+      html = render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg", pan_locked: true)
+      assert html =~ ~s(data-pan-locked="true")
+    end
   end
 
   describe "Fresco.canvas/1" do
@@ -236,6 +258,32 @@ defmodule FrescoTest do
       canvas = build_canvas()
       html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas, "data-extra": "yes")
       assert html =~ ~s(data-extra="yes")
+    end
+
+    test "zoom_floor / zoom_ceiling / pan_locked default to omitted attrs (no behavior change)" do
+      canvas = build_canvas()
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas)
+      refute html =~ "data-zoom-floor"
+      refute html =~ "data-zoom-ceiling"
+      refute html =~ "data-pan-locked"
+    end
+
+    test "zoom_floor renders the data attribute" do
+      canvas = build_canvas()
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas, zoom_floor: 0.5)
+      assert html =~ ~s(data-zoom-floor="0.5")
+    end
+
+    test "zoom_ceiling renders the data attribute" do
+      canvas = build_canvas()
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas, zoom_ceiling: 4.0)
+      assert html =~ ~s(data-zoom-ceiling="4.0")
+    end
+
+    test "pan_locked=true renders data-pan-locked=\"true\"" do
+      canvas = build_canvas()
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas, pan_locked: true)
+      assert html =~ ~s(data-pan-locked="true")
     end
   end
 

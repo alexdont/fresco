@@ -96,6 +96,45 @@ defmodule Fresco.Viewer do
     """
   )
 
+  attr(:zoom_floor, :float,
+    default: nil,
+    doc: """
+    Optional minimum zoom scale, in engine units (screen-px-per-image-px).
+    When set, the engine clamps every zoom path — wheel, pinch,
+    double-click, `fitBounds` — at this floor. `nil` (default) falls
+    through to the engine's normal floor (`sFit` in clamped mode,
+    `sFit * 0.05` in `:infinite_canvas` mode).
+
+    Consumers can also set this at runtime via
+    `handle.setZoomFloor(scale)` — useful when the floor depends on
+    state that's known only after mount (e.g. a paged reader recomputing
+    the floor each time the user navigates to a new page).
+    """
+  )
+
+  attr(:zoom_ceiling, :float,
+    default: nil,
+    doc: """
+    Optional maximum zoom scale. Symmetric to `:zoom_floor`. `nil`
+    (default) uses the engine's default ceiling (8× natural pixel ratio
+    capped by the 8192-px raster safety limit).
+    """
+  )
+
+  attr(:pan_locked, :boolean,
+    default: false,
+    doc: """
+    When `true`, single-pointer pan gestures (mouse drag, touch drag,
+    arrow keys) are suppressed. Two-pointer pinch still works for
+    zoom. Useful for paged readers that want the page statically
+    centered at fit and only allow pan once the user has zoomed in.
+
+    Toggle at runtime via `handle.setPanLocked(true|false)` — typically
+    in response to a `handle.on("zoom", …)` subscription that flips
+    the lock as the user crosses the fit threshold.
+    """
+  )
+
   attr(:rest, :global)
 
   @doc """
@@ -113,6 +152,9 @@ defmodule Fresco.Viewer do
       data-src={@src}
       data-infinite-canvas={to_string(@infinite_canvas)}
       data-fresco-theme={to_string(@theme)}
+      data-zoom-floor={@zoom_floor && to_string(@zoom_floor)}
+      data-zoom-ceiling={@zoom_ceiling && to_string(@zoom_ceiling)}
+      data-pan-locked={@pan_locked && "true"}
       class={[
         "fresco-viewer",
         @class,

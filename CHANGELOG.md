@@ -4,6 +4,66 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.1 — 2026-05-19
+
+Opt-in constraint controls on the engine: **zoom floor / zoom ceiling
+overrides** and a **pan lock**. Lets consumers pin the zoom-out floor to
+a logical "page" (paged readers, wallpaper croppers) and freeze pan
+gestures while the user is at fit. The whole surface is additive — all
+three default to no-op so existing consumers see identical pre-0.5.1
+behavior.
+
+### Why
+
+The 0.5.0 engine computed `sMin = sFit` (clamped) or `sFit * 0.05`
+(infinite_canvas) once from the canvas-natural dimensions. For paged
+readers using `<Fresco.canvas>` to host every page side-by-side and
+navigating via `handle.fitBounds(page_rect)`, neither default fit a
+"per-page" zoom-out floor — the floor needs to be the current page's
+fit-to-viewport scale, which changes as the user navigates. Same need
+surfaces for single-image consumers cropping a wallpaper to a
+fixed-aspect viewport.
+
+The 0.5.0 workaround was an `animation`-event bounce-back: watch s
+per-frame, snap back when it dips below the desired floor. Visibly
+jitters on pinch. 0.5.1's setters give the engine a hard clamp instead.
+
+### Added
+
+- **`handle.setZoomFloor(scale)`** on both viewer and canvas handles.
+  Overrides the engine's `sMin` until cleared. Pass a positive number
+  to set, `null` / `undefined` / `0` to revert. The floor is enforced
+  across all zoom paths — wheel, pinch, double-click, `fitBounds`,
+  `setTransform` — so consumers can't accidentally bypass their own
+  floor.
+- **`handle.setZoomCeiling(scale)`** — symmetric ceiling override.
+  Defaults to the engine's `min(8 × natural ratio, 8192-px raster cap)`.
+- **`handle.setPanLocked(locked)`** — when `true`, single-pointer pan
+  gestures (mouse drag, touch drag, arrow keys, programmatic
+  `panBy`) are suppressed. Two-pointer pinch still works for zoom.
+- **Component attrs** (declarative sugar): `:zoom_floor`,
+  `:zoom_ceiling`, `:pan_locked` on both `<Fresco.viewer>` and
+  `<Fresco.canvas>`. Render as `data-zoom-floor` / `data-zoom-ceiling`
+  / `data-pan-locked` on the host; the engine reads them at mount and
+  applies before the first gesture. Consumers who need to update the
+  constraints at runtime (e.g. per-page in a paged reader) use the
+  handle methods directly.
+
+### Engine internals
+
+`recomputeBounds` now reads `customSMin` / `customSMax` closure-locals
+that shadow the computed defaults when set. The `panBy` and pointer-
+drag pan path short-circuit when `panLocked === true`. Pinch (two
+pointers) is unaffected by the lock so zoom-via-gesture still works.
+
+### Unchanged
+
+- All existing handle methods, events, theming, infinite-canvas
+  semantics — untouched. The `<Fresco.scroll_strip>` block is unrelated
+  to this change.
+- No breaking changes to data layouts, file format, or
+  `Fresco.Canvas`'s API.
+
 ## 0.5.0 — 2026-05-19
 
 Full rewrite of `<Fresco.viewer>` plus a new companion component

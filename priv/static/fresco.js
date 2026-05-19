@@ -368,6 +368,22 @@
   }
 
   // ===========================================================================
+  // Apply opt-in constraint data-attributes to a freshly-mounted engine. Reads
+  // `data-zoom-floor`, `data-zoom-ceiling`, `data-pan-locked` off the host
+  // element; missing/empty attrs are no-ops. Used by both mountFrescoViewer
+  // and mountFrescoCanvas. Consumers can also call the engine setters at
+  // runtime via the handle.
+  // ===========================================================================
+
+  function applyConstraintAttrs(el, engine) {
+    var floor = parseFloat(el.dataset.zoomFloor);
+    if (!isNaN(floor) && floor > 0) engine.setZoomFloor(floor);
+    var ceil = parseFloat(el.dataset.zoomCeiling);
+    if (!isNaN(ceil) && ceil > 0) engine.setZoomCeiling(ceil);
+    if (el.dataset.panLocked === "true") engine.setPanLocked(true);
+  }
+
+  // ===========================================================================
   // Shared transform engine — drives both <Fresco.viewer> (single image) and
   // <Fresco.canvas> (N images at canvas-pixel coords). The math is identical;
   // only what gets sized per-frame differs.
@@ -398,6 +414,18 @@
     var pointers = new Map();
     var gestureStart = null;
 
+    // ── Consumer-controlled overrides (opt-in; null = engine defaults) ─────
+    // `customSMin` / `customSMax` shadow the computed sMin / sMax in
+    // recomputeBounds when set. Used by paged readers / wallpaper croppers
+    // that want a fixed zoom-out floor tied to a logical "page" rather
+    // than to the whole-canvas fit. `panLocked` ignores single-pointer pan
+    // (drag + arrow-key) entirely — two-pointer pinch still works for zoom.
+    // All three default to null/false so consumers who don't opt in get
+    // the exact pre-existing behavior.
+    var customSMin = null;
+    var customSMax = null;
+    var panLocked = false;
+
     // ── Math ───────────────────────────────────────────────────────────────
     function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
@@ -407,14 +435,17 @@
       } else {
         sFit = 1;
       }
-      sMin = infiniteCanvas ? sFit * 0.05 : sFit;
+      var defaultSMin = infiniteCanvas ? sFit * 0.05 : sFit;
+      sMin = (typeof customSMin === "number") ? customSMin : defaultSMin;
       // GPU safety: keep the rasterized layer under MAX_RASTER_DIM on each
       // axis or the browser re-rasterizes mid-zoom (the one-time flash bug).
       var MAX_RASTER_DIM = 8192;
       var rasterCap = MAX_RASTER_DIM / Math.max(nw || 1, nh || 1);
-      sMax = Math.min(8, rasterCap);
-      if (sMax < sFit) sMax = sFit;
-      if (sMax < 1) sMax = Math.max(sFit, 1);
+      var defaultSMax = Math.min(8, rasterCap);
+      if (defaultSMax < sFit) defaultSMax = sFit;
+      if (defaultSMax < 1) defaultSMax = Math.max(sFit, 1);
+      sMax = (typeof customSMax === "number") ? customSMax : defaultSMax;
+      if (sMax < sMin) sMax = sMin;
     }
 
     function clampPan() {
@@ -462,6 +493,7 @@
     }
 
     function panBy(dx, dy) {
+      if (panLocked) return;
       tx += dx; ty += dy;
       clampPan();
       bus._emit("pan", { tx: tx, ty: ty });
@@ -547,6 +579,10 @@
       if (!gestureStart) return;
 
       if (gestureStart.kind === "pan") {
+        // panLocked suppresses single-pointer drag entirely. Two-pointer
+        // pinch (handled below) still works for zoom. setZoomFloor /
+        // setZoomCeiling are honored implicitly via zoomAt's clamp.
+        if (panLocked) return;
         var dx = e.clientX - gestureStart.x;
         var dy = e.clientY - gestureStart.y;
         tx = gestureStart.tx + dx;
@@ -693,6 +729,41 @@
       if (navEl && navEl.parentNode) navEl.parentNode.removeChild(navEl);
     }
 
+    // Override the engine's sMin (the zoom-out floor). Pass a positive
+    // number to set; pass null/undefined/0 to revert to the engine
+    // default (sFit for clamped mode, sFit*0.05 for infinite_canvas).
+    // The new floor applies to all subsequent zoom paths (wheel, pinch,
+    // double-click, fitBounds via setTransform) — consumers can't
+    // accidentally bypass their own floor.
+    function setZoomFloor(v) {
+      customSMin = (typeof v === "number" && v > 0) ? v : null;
+      recomputeBounds();
+      if (s < sMin) {
+        s = sMin;
+        clampPan();
+        bus._emit("zoom", { scale: s });
+        requestFrame();
+      }
+    }
+
+    // Symmetric ceiling override. Same semantics as setZoomFloor.
+    function setZoomCeiling(v) {
+      customSMax = (typeof v === "number" && v > 0) ? v : null;
+      recomputeBounds();
+      if (s > sMax) {
+        s = sMax;
+        clampPan();
+        bus._emit("zoom", { scale: s });
+        requestFrame();
+      }
+    }
+
+    // When locked: panBy + single-pointer drag are no-ops; two-pointer
+    // pinch still works for zoom. Consumers toggle this in response to
+    // scale changes (e.g. paged readers lock pan at fit, unlock when
+    // zoomed in).
+    function setPanLocked(b) { panLocked = !!b; }
+
     return {
       el: el,
       stage: stage,
@@ -710,6 +781,9 @@
       isInfiniteCanvas: function() { return infiniteCanvas; },
       isReady: function() { return ready; },
       setReady: function(b) { ready = b; },
+      setZoomFloor: setZoomFloor,
+      setZoomCeiling: setZoomCeiling,
+      setPanLocked: setPanLocked,
       teardown: teardown
     };
   }
@@ -824,6 +898,11 @@
       img.addEventListener("load", onImgLoad, { once: true });
     }
 
+    // Apply opt-in zoom/pan constraint attrs (data-zoom-floor /
+    // data-zoom-ceiling / data-pan-locked from the Phoenix component).
+    // No-op when absent so existing consumers see identical behavior.
+    applyConstraintAttrs(el, engine);
+
     return {
       el: el,
       stage: stage,
@@ -841,6 +920,9 @@
       zoomAt: engine.zoomAt,
       panBy: engine.panBy,
       setTransform: engine.setTransform,
+      setZoomFloor: engine.setZoomFloor,
+      setZoomCeiling: engine.setZoomCeiling,
+      setPanLocked: engine.setPanLocked,
       setSource: setSource,
       swapSourcePreservingBounds: swapSourcePreservingBounds,
       teardown: engine.teardown
@@ -901,6 +983,14 @@
       fitBounds: fitBounds,
       setSource: function(url) { controller.setSource(url); },
       swapSourcePreservingBounds: function(url) { controller.swapSourcePreservingBounds(url); },
+      // Opt-in zoom + pan constraint controls (0.5.1+). All three are
+      // no-ops at their defaults (null / null / false), so existing
+      // consumers see identical behavior unless they call these. See
+      // the engine's setZoomFloor / setZoomCeiling / setPanLocked
+      // docstrings for semantics.
+      setZoomFloor:   function(v) { controller.setZoomFloor(v); },
+      setZoomCeiling: function(v) { controller.setZoomCeiling(v); },
+      setPanLocked:   function(b) { controller.setPanLocked(b); },
       on: bus.on,
       _emit: bus._emit,
       appendNavButton: function(svg, title, onClick) {
@@ -1029,6 +1119,11 @@
     }
     initialFit();
 
+    // Apply opt-in zoom/pan constraint attrs after the initial fit so the
+    // floor is comparable to the just-computed sFit (consumers typically
+    // express the floor in those terms).
+    applyConstraintAttrs(el, engine);
+
     function onImgLoad(e) {
       var im = e.target;
       engine.bus._emit("image-loaded", {
@@ -1110,6 +1205,9 @@
       zoomAt: engine.zoomAt,
       panBy: engine.panBy,
       setTransform: engine.setTransform,
+      setZoomFloor: engine.setZoomFloor,
+      setZoomCeiling: engine.setZoomCeiling,
+      setPanLocked: engine.setPanLocked,
       refreshLayout: refreshLayout,
       teardown: engine.teardown
     };
@@ -1178,6 +1276,14 @@
       imageBoundsFor: controller.imageBoundsFor,
       fitImage: fitImage,
       getExtension: controller.getExtension,
+      // Opt-in zoom + pan constraint controls (0.5.1+). Same semantics
+      // as on the viewer handle — paged readers / wallpaper croppers
+      // use these to fix the zoom-out floor and lock pan at fit. All
+      // three default to no-op so consumers who don't opt in see
+      // identical pre-0.5.1 behavior.
+      setZoomFloor:   function(v) { controller.setZoomFloor(v); },
+      setZoomCeiling: function(v) { controller.setZoomCeiling(v); },
+      setPanLocked:   function(b) { controller.setPanLocked(b); },
       on: bus.on,
       _emit: bus._emit,
       appendNavButton: function(svg, title, onClick) {
