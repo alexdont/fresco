@@ -4,6 +4,171 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.2 — 2026-05-19
+
+Nine additive consumer hooks. Cleans up the workarounds the heaviest
+consumer (paged manga/manhwa reader) carries today, and adds generic
+capabilities — animated transitions, memory windowing, gesture / nav
+allowlists, tap events, view-tracking analytics — every Fresco consumer
+benefits from. Every new API defaults to no-op / unset, so existing
+call sites see identical pre-0.5.2 behavior.
+
+### Added — runtime handle methods
+
+Call these after `window.Fresco.onReady(id, handle => ...)`:
+
+- **`handle.setPanBounds(rect | null)`** — clamp pan to a custom canvas-
+  pixel rect (overrides `infinite_canvas`'s no-clamp when set). Pass
+  `null` to revert. Wired on both viewer and canvas handles.
+- **`handle.setHomeAction(fn | null)`** — override the reset nav button
+  + `0`-key behavior with a custom function. Pass `null` to revert to
+  the engine's default `fit()`. Wired on both handles.
+- **`handle.setImageVisible(id, bool)`** (canvas only) — toggle
+  individual images' visibility without changing layout. Pan-bounds,
+  annotations, fit math stay anchored to the original layout.
+- **`handle.setMemoryWindow(n)`** (canvas only) — programmatic
+  alternative to the `:memory_window` attr. Pass an integer (viewports
+  of padding) or 0/null to disable.
+- **`handle.fitBounds(rect, {animate, duration, easing})`** — opt-in
+  animated transition between viewport positions. Default still
+  instant; animation cancels cleanly on any user gesture (pointerdown,
+  wheel, dblclick) so the user's intent always wins. Easing functions:
+  `"linear"`, `"ease-out"` (default), `"ease-in"`, `"ease-in-out"`.
+  Wired on both handles.
+- **`handle.enableViewTracking({settleMs, threshold})` /
+  `handle.disableViewTracking()` / `handle.getFocusedImage()`**
+  (canvas + strip) — opt-in view-tracking. Emits `view-focus` /
+  `view-blur` on the bus whenever the dominant image changes. Useful
+  for reading-time analytics, resume-position persistence, A/B nav
+  tests. See `:view_tracking` attr below for the declarative form.
+
+### Added — bus events
+
+- **`tap`** — fires on non-drag pointerup. Payload:
+  `{x, y, imageX, imageY, pointerType}`. Movement threshold for "no
+  drag" is 5px cumulative. Centralizes tap-vs-drag detection so
+  consumers don't re-roll pointer state.
+- **`image-evicted` / `image-restored`** (canvas only) — paired events
+  fired by the memory-windowing loop when an image's `src` is swapped
+  in or out. Payload: `{imageId}`.
+- **`view-focus` / `view-blur`** (canvas + strip, opt-in via
+  `:view_tracking`) — paired events. `view-focus` fires when a new
+  image becomes dominant; `view-blur` fires when it loses dominance.
+  Payloads:
+  - `view-focus`: `{imageId, previousImageId, atMs}` (previousImageId
+    is `null` on the very first focus.)
+  - `view-blur`: `{imageId, durationMs, atMs, reason}`. Reason is one
+    of `"viewport-change"` (user navigated away), `"page-hidden"`
+    (browser tab backgrounded), `"disabled"` (consumer called
+    `disableViewTracking`), or `"destroyed"` (component
+    unmount). Lets consumers separate "user moved on" from "user
+    walked away" for time-on-page math.
+  Three guarantees: every `view-focus` is eventually paired with a
+  `view-blur` for the same id; blur+focus fire together on viewport-
+  change (single chained pair per actual user-visible focus change);
+  duration is wall-clock from focus to blur (page-visibility pauses
+  emit an explicit `"page-hidden"` blur so consumers can exclude
+  inactive time on their side if they want).
+
+### Added — declarative component attrs
+
+- **`:initial_fit_image_id`** (canvas) — land at this image's fit on
+  first paint. Avoids the brief flash of "whole-canvas visible" before
+  an `onReady` callback re-fits. Falls back to canvas-wide fit (with
+  a `console.warn`) if the id doesn't match.
+- **`:initial_fit_bounds`** (canvas) — same, for a custom rect. Map of
+  `%{x:, y:, width:, height:}`. Mutually exclusive with
+  `:initial_fit_image_id` (image-id wins).
+- **`:memory_window`** (canvas) — auto-evict `src` for images more
+  than N viewport-widths/heights from the current viewport. Same trick
+  `<Fresco.scroll_strip>` uses, generalized to 2D layouts. Eviction
+  recomputes throttled to every 8 animation frames. Restore happens
+  automatically when an image's rect comes back into the inflated
+  window.
+- **`:gestures`** (viewer + canvas) — allowlist of enabled gestures:
+  `[:pan, :pinch, :wheel, :double_click, :keyboard]`. Default `nil`
+  enables all. Omitted entries are disabled. Useful for kiosks
+  (drop `:keyboard`), swipe-paged readers handling their own taps
+  (drop `:double_click`).
+- **`:nav_buttons`** (viewer + canvas) — allowlist of enabled built-in
+  nav buttons: `[:home, :zoom_in, :zoom_out, :fullscreen]`. Default
+  `nil` enables all. Omitted entries are hidden from the rendered nav.
+- **`:view_tracking`** (canvas + strip) — declarative on-switch for
+  the view-tracking event channel described above. Default `false`.
+  Companions: `:view_settle_ms` (default `150`, ms the new dominant
+  image must hold before `view-focus` fires; filters fly-bys) and
+  `:view_threshold` (default `0.5`, fraction of canvas image area
+  that must intersect the viewport to count as dominant — canvas
+  only). All four are inert when `:view_tracking` is off.
+
+### Fixed
+
+- **High-resolution images in `<Fresco.viewer>` no longer get stuck
+  showing only the top-left corner.** Previously, an image with very
+  large natural dimensions (e.g. 30000×20000) would render at natural
+  CSS pixel size during the window between the img element appearing
+  in the DOM and the engine reading `naturalWidth` + running the
+  first fit. The viewer's `overflow: hidden` clipped everything
+  outside the viewport, and `clampPan` had nothing meaningful to
+  clamp against (iw/ih were 0), so the user couldn't pan to the
+  rest. Three changes fix it together:
+  - **New CSS rule** hides `.fresco-stage img` until the host has
+    the `fresco--ready` class. The class flips on after the first
+    successful fit (viewer + canvas) or on an image-load error.
+    No more natural-size flash regardless of image size or load
+    duration.
+  - **Fit no longer waits on `img.decode()`.** For huge images the
+    decode promise could take seconds; the engine now fits as soon
+    as natural dimensions are available, then kicks off decode in
+    the background for GPU readiness. Worst case: a brief blur on
+    the first frame.
+  - **Fit runs when `naturalWidth > 0` even if `img.complete` is
+    `false`** (header bytes give us the metadata we need before
+    the body finishes streaming). Re-runs on `load` if needed.
+- **`error` event on the bus** when an image fails to load. The
+  engine marks itself ready so pan/zoom UI doesn't lock up (the
+  host shows the browser's broken-image placeholder).
+- **Relaxed the `sMax` ceiling** from a 8192-px GPU layer cap to
+  a 30000-px max-element-size cap. The 8192 figure was a
+  rasterization safety from the 0.4.x transform-scale engine and
+  artificially limited zoom on medium-large images (e.g. an
+  8000-px image was capped at ~1× natural ratio instead of 8×).
+  Width/height-based rendering doesn't have GPU texture limits;
+  the only real ceiling is the browser's max element size, which
+  is ~32767 px on all major engines.
+
+### Engine internals
+
+- `createTransformEngine` now accepts `zoomFloor` / `zoomCeiling` /
+  `panLocked` / `gestures` / `navButtons` opts (parsed from data-attrs
+  via the new internal `readConstraintAttrs` helper) so the nav
+  allowlist is honored on first paint, not after a flash of the full
+  button set.
+- `setTransform` cancels any in-flight animation — an explicit
+  `setTransform` is a "go here now" command. Use `animateTo` (or
+  `fitBounds(rect, {animate: true})`) for the glide variant.
+
+### Replaces these consumer workarounds
+
+The paged-reader workarounds we'd been carrying for the heaviest
+consumer collapse into one-liners with 0.5.2:
+
+| Old hack | New API |
+|---|---|
+| `pan` event → call `fitBounds` to clamp inside the spread | `handle.setPanBounds(spread_rect)` |
+| `animation` event → catch home-button bypassing the floor | `handle.setHomeAction(() => fitToCurrentPage())` |
+| `dblclick` capture-phase listener to swallow Fresco's zoom | `:gestures={[:pan, :pinch, :wheel, :keyboard]}` |
+| Manual `img.style.visibility = "hidden"` on neighbours | `handle.setImageVisible(neighbour_id, false)` |
+| `onReady` re-fit causing a microsecond strip-visible flash | `:initial_fit_image_id="current-page"` |
+| Hand-rolled drag-vs-tap in pointer handlers | `handle.on("tap", e => ...)` |
+| Custom dominant-image / settle / page-visibility tracking for analytics | `:view_tracking` + `handle.on("view-focus" / "view-blur", e => ...)` |
+
+### Unchanged
+
+All existing handle methods, events, theming, infinite-canvas
+semantics, `<Fresco.scroll_strip>`, file format, `Fresco.Canvas` API —
+all untouched. Every 0.5.2 feature is additive and defaults off.
+
 ## 0.5.1 — 2026-05-19
 
 Opt-in constraint controls on the engine: **zoom floor / zoom ceiling

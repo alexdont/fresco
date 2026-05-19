@@ -202,6 +202,19 @@
       "  -webkit-user-drag: none;",
       "  pointer-events: none;",
       "}",
+      // Hide the image until the engine has run the first fit. Without this,
+      // a high-resolution image (e.g. 30000×20000) renders at its natural
+      // CSS pixel size during the gap between the img element appearing in
+      // the DOM and the engine reading naturalWidth + calling applyChildren.
+      // The viewer's `overflow: hidden` clips everything outside the
+      // viewport — the user sees just the top-left chunk and can't pan to
+      // the rest (clampPan has nothing to clamp against until iw/ih are
+      // set). Toggling visibility via this class keeps the layout stable
+      // (img still participates in stage sizing) while keeping the natural-
+      // size flash invisible.
+      ".fresco-viewer:not(.fresco--ready) .fresco-stage img {",
+      "  visibility: hidden;",
+      "}",
       // System mode: follow OS preference. Excluded for explicit light or inherit.
       "@media (prefers-color-scheme: dark) {",
       "  .fresco-viewer:not([data-fresco-theme=\"light\"]):not([data-fresco-theme=\"inherit\"]) {",
@@ -349,20 +362,177 @@
   }
 
   // ===========================================================================
+  // View tracker — emits "view-focus" / "view-blur" events on the bus when
+  // the dominant image on the host changes (or visibility flips). Shared
+  // between <Fresco.canvas> (overlap-ratio dominance) and
+  // <Fresco.scroll_strip> (existing currentImageIdx). The host supplies
+  // `getDominantImageId() → string | null` and calls `tick()` when the
+  // viewport changes; the tracker handles the settleMs gate, the focused-
+  // state machine, the Page Visibility pause, and the event emits.
+  //
+  // Default off — callers explicitly invoke `enable(opts)` to start. Until
+  // then the helper sits idle and emits nothing.
+  // ===========================================================================
+
+  function createViewTracker(opts) {
+    var bus = opts.bus;
+    var getDominantImageId = opts.getDominantImageId;
+    var settleMs = (typeof opts.defaultSettleMs === "number") ? opts.defaultSettleMs : 150;
+    var threshold = (typeof opts.defaultThreshold === "number") ? opts.defaultThreshold : 0.5;
+
+    var enabled = false;
+    var focusedImageId = null;
+    var focusedAtMs = 0;
+    var candidateImageId = null;
+    var candidateSince = 0;
+    var settleTimerId = null;
+    var visibilityListener = null;
+
+    function nowMs() {
+      return (typeof performance !== "undefined" && performance.now)
+        ? performance.now() : Date.now();
+    }
+
+    function clearSettleTimer() {
+      if (settleTimerId) {
+        try { clearTimeout(settleTimerId); } catch (_) {}
+        settleTimerId = null;
+      }
+    }
+
+    function commitChange(newId, reason) {
+      var prev = focusedImageId;
+      var prevAtMs = focusedAtMs;
+      if (prev !== null && prev !== newId) {
+        bus._emit("view-blur", {
+          imageId: prev,
+          durationMs: Math.max(0, nowMs() - prevAtMs),
+          atMs: nowMs(),
+          reason: reason || "viewport-change"
+        });
+      }
+      if (newId !== null && newId !== prev) {
+        focusedImageId = newId;
+        focusedAtMs = nowMs();
+        bus._emit("view-focus", {
+          imageId: newId,
+          previousImageId: prev,
+          atMs: nowMs()
+        });
+      } else if (newId === null) {
+        focusedImageId = null;
+        focusedAtMs = 0;
+      }
+    }
+
+    function tick() {
+      if (!enabled) return;
+      if (typeof document !== "undefined" && document.hidden) return;
+      var dominant = null;
+      try { dominant = getDominantImageId(threshold); } catch (_) {}
+      if (dominant === candidateImageId) return;
+      candidateImageId = dominant;
+      candidateSince = nowMs();
+      clearSettleTimer();
+      if (dominant !== focusedImageId) {
+        // Schedule a commit after the settle window. If the candidate
+        // changes again before settle, the next tick clears this
+        // timer and starts a new one.
+        settleTimerId = setTimeout(function() {
+          settleTimerId = null;
+          if (enabled &&
+              candidateImageId === dominant &&
+              dominant !== focusedImageId) {
+            commitChange(dominant, "viewport-change");
+          }
+        }, settleMs);
+      }
+    }
+
+    function onVisibilityChange() {
+      if (!enabled) return;
+      if (typeof document !== "undefined" && document.hidden) {
+        if (focusedImageId !== null) {
+          commitChange(null, "page-hidden");
+        }
+        clearSettleTimer();
+        candidateImageId = null;
+        candidateSince = 0;
+      } else {
+        tick();
+      }
+    }
+
+    function enable(o) {
+      if (o && typeof o.settleMs === "number") settleMs = o.settleMs;
+      if (o && typeof o.threshold === "number") threshold = o.threshold;
+      if (enabled) {
+        tick();
+        return;
+      }
+      enabled = true;
+      if (typeof document !== "undefined" && document.addEventListener) {
+        visibilityListener = onVisibilityChange;
+        document.addEventListener("visibilitychange", visibilityListener);
+      }
+      tick();
+    }
+
+    function disable(reason) {
+      if (!enabled) return;
+      if (focusedImageId !== null) {
+        commitChange(null, reason || "disabled");
+      }
+      enabled = false;
+      clearSettleTimer();
+      candidateImageId = null;
+      candidateSince = 0;
+      if (visibilityListener && typeof document !== "undefined") {
+        try {
+          document.removeEventListener("visibilitychange", visibilityListener);
+        } catch (_) {}
+      }
+      visibilityListener = null;
+    }
+
+    function getFocused() {
+      if (!enabled || focusedImageId === null) return null;
+      return {
+        imageId: focusedImageId,
+        durationSoFarMs: nowMs() - focusedAtMs,
+        atMs: focusedAtMs
+      };
+    }
+
+    return {
+      enable: enable,
+      disable: disable,
+      tick: tick,
+      getFocused: getFocused,
+      isEnabled: function() { return enabled; }
+    };
+  }
+
+  // ===========================================================================
   // Nav overlay — four buttons (fullscreen, zoom-in, zoom-out, reset). The
   // host element provides relative positioning (set in CSS), and the nav
   // attaches as a child so extensions can append more buttons via
   // `handle.appendNavButton(...)`.
   // ===========================================================================
 
-  function buildNav(host, handlers) {
+  function buildNav(host, handlers, opts) {
     injectStyles();
     var nav = document.createElement("div");
     nav.className = "fresco-nav";
-    nav.appendChild(makeButton(ICONS.expand, "Toggle fullscreen", handlers.onFullscreen));
-    nav.appendChild(makeButton(ICONS.zoomIn, "Zoom in",  handlers.onZoomIn));
-    nav.appendChild(makeButton(ICONS.zoomOut, "Zoom out", handlers.onZoomOut));
-    nav.appendChild(makeButton(ICONS.reset,  "Reset view", handlers.onFit));
+    // `opts.navButtonEnabled` is the consumer's allowlist gate. Default
+    // (no gate) keeps every button — back-compat with pre-0.6 callers.
+    var enabled = (opts && typeof opts.navButtonEnabled === "function")
+      ? opts.navButtonEnabled
+      : function() { return true; };
+    if (enabled("fullscreen")) nav.appendChild(makeButton(ICONS.expand, "Toggle fullscreen", handlers.onFullscreen));
+    if (enabled("zoom_in"))    nav.appendChild(makeButton(ICONS.zoomIn,  "Zoom in",  handlers.onZoomIn));
+    if (enabled("zoom_out"))   nav.appendChild(makeButton(ICONS.zoomOut, "Zoom out", handlers.onZoomOut));
+    if (enabled("home"))       nav.appendChild(makeButton(ICONS.reset,   "Reset view", handlers.onFit));
     host.appendChild(nav);
     return nav;
   }
@@ -375,13 +545,36 @@
   // runtime via the handle.
   // ===========================================================================
 
-  function applyConstraintAttrs(el, engine) {
+  // Read all 0.5.1+/0.6.0 declarative data-attrs off the host element
+  // and return them as a single opts object. Used by both mount
+  // functions to pre-configure the engine BEFORE it builds the nav
+  // overlay (so the nav allowlist is honored on first paint, not after
+  // a flash of the full button set).
+  function readConstraintAttrs(el) {
+    var opts = {};
     var floor = parseFloat(el.dataset.zoomFloor);
-    if (!isNaN(floor) && floor > 0) engine.setZoomFloor(floor);
+    if (!isNaN(floor) && floor > 0) opts.zoomFloor = floor;
     var ceil = parseFloat(el.dataset.zoomCeiling);
-    if (!isNaN(ceil) && ceil > 0) engine.setZoomCeiling(ceil);
-    if (el.dataset.panLocked === "true") engine.setPanLocked(true);
+    if (!isNaN(ceil) && ceil > 0) opts.zoomCeiling = ceil;
+    if (el.dataset.panLocked === "true") opts.panLocked = true;
+    if (el.dataset.gestures) {
+      var gs = el.dataset.gestures.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+      if (gs.length > 0) opts.gestures = gs;
+    }
+    if (el.dataset.navButtons) {
+      var bs = el.dataset.navButtons.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+      if (bs.length > 0) opts.navButtons = bs;
+    }
+    return opts;
   }
+
+  // Apply attrs that take effect AFTER the engine + nav are constructed
+  // (runtime overrides whose values are already set inside the engine
+  // via createTransformEngine opts; the post-construct call is for
+  // anything that needs `requestFrame` after fit, etc.). Kept for
+  // back-compat shape; currently a no-op since readConstraintAttrs
+  // covers everything.
+  function applyConstraintAttrs(/* el, engine */) { /* no-op */ }
 
   // ===========================================================================
   // Shared transform engine — drives both <Fresco.viewer> (single image) and
@@ -402,6 +595,13 @@
     var getNaturalSize = opts.getNaturalSize;
     var applyChildren  = opts.applyChildren;
     var infiniteCanvas = !!opts.infiniteCanvas;
+    // 0.6.0 — opt-in initial configuration from the host's data-attrs
+    // (parsed by readConstraintAttrs). All optional / undefined-safe.
+    var initialZoomFloor   = opts.zoomFloor;
+    var initialZoomCeiling = opts.zoomCeiling;
+    var initialPanLocked   = !!opts.panLocked;
+    var initialGestures    = opts.gestures;     // array or undefined
+    var initialNavButtons  = opts.navButtons;   // array or undefined
 
     // ── State ──────────────────────────────────────────────────────────────
     var tx = 0, ty = 0, s = 1;
@@ -414,17 +614,24 @@
     var pointers = new Map();
     var gestureStart = null;
 
-    // ── Consumer-controlled overrides (opt-in; null = engine defaults) ─────
-    // `customSMin` / `customSMax` shadow the computed sMin / sMax in
-    // recomputeBounds when set. Used by paged readers / wallpaper croppers
-    // that want a fixed zoom-out floor tied to a logical "page" rather
-    // than to the whole-canvas fit. `panLocked` ignores single-pointer pan
-    // (drag + arrow-key) entirely — two-pointer pinch still works for zoom.
-    // All three default to null/false so consumers who don't opt in get
-    // the exact pre-existing behavior.
-    var customSMin = null;
-    var customSMax = null;
-    var panLocked = false;
+    // ── Consumer-controlled overrides (opt-in; null/false = engine defaults) ─
+    // `customSMin` / `customSMax` shadow sMin / sMax in recomputeBounds.
+    // `panLocked` ignores single-pointer pan (drag + arrow-key); pinch
+    // still works for zoom. `customPanBounds` clamps pan to a custom rect
+    // in canvas-pixel coords (overrides infiniteCanvas's no-clamp).
+    // `customHome` overrides the reset-button / `0`-key behavior with a
+    // consumer-supplied function. `enabledGestures` / `enabledNavButtons`
+    // are allowlists for gestures and built-in nav buttons (null = all
+    // enabled).
+    //
+    // All defaults preserve pre-0.6 behavior — consumers opt in explicitly.
+    var customSMin = (typeof initialZoomFloor === "number") ? initialZoomFloor : null;
+    var customSMax = (typeof initialZoomCeiling === "number") ? initialZoomCeiling : null;
+    var panLocked = initialPanLocked;
+    var customPanBounds = null;      // {x, y, width, height} | null
+    var customHome = null;           // function | null
+    var enabledGestures = Array.isArray(initialGestures) ? new Set(initialGestures) : null;
+    var enabledNavButtons = Array.isArray(initialNavButtons) ? new Set(initialNavButtons) : null;
 
     // ── Math ───────────────────────────────────────────────────────────────
     function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
@@ -437,18 +644,52 @@
       }
       var defaultSMin = infiniteCanvas ? sFit * 0.05 : sFit;
       sMin = (typeof customSMin === "number") ? customSMin : defaultSMin;
-      // GPU safety: keep the rasterized layer under MAX_RASTER_DIM on each
-      // axis or the browser re-rasterizes mid-zoom (the one-time flash bug).
-      var MAX_RASTER_DIM = 8192;
-      var rasterCap = MAX_RASTER_DIM / Math.max(nw || 1, nh || 1);
-      var defaultSMax = Math.min(8, rasterCap);
+      // Cap on the rendered CSS size in either axis. Most browsers
+      // refuse to lay out elements larger than ~32767 px (signed
+      // 16-bit); we use 30000 as a safe floor across Chrome / Safari
+      // / Firefox. The 0.4.x-era 8192 cap was a GPU-layer-texture
+      // safety for the transform-scale engine; the width/height
+      // engine in 0.5.x doesn't have that constraint, so the only
+      // real ceiling is the browser's max element size.
+      var MAX_RENDERED_PX = 30000;
+      var renderedCap = MAX_RENDERED_PX / Math.max(nw || 1, nh || 1);
+      // Default ceiling is 8× natural pixel ratio (matches OSD's
+      // legacy `maxZoomPixelRatio: 8`). Take whichever of {8, renderedCap}
+      // is smaller for browser safety, but never go below sFit
+      // (otherwise the user can't zoom in at all).
+      var defaultSMax = Math.min(8, renderedCap);
       if (defaultSMax < sFit) defaultSMax = sFit;
-      if (defaultSMax < 1) defaultSMax = Math.max(sFit, 1);
       sMax = (typeof customSMax === "number") ? customSMax : defaultSMax;
       if (sMax < sMin) sMax = sMin;
     }
 
     function clampPan() {
+      // setPanBounds takes precedence over infiniteCanvas. The consumer is
+      // explicitly opting into clamping for a custom rect; the "no clamp"
+      // contract of infinite_canvas only applies when no rect is set.
+      if (customPanBounds) {
+        var px = customPanBounds.x, py = customPanBounds.y;
+        var pw = customPanBounds.width * s, ph = customPanBounds.height * s;
+        // Convert custom-rect bounds to screen-space at current scale.
+        // Image-pixel custom coords → screen coords use the same formula
+        // as imageToScreen (without the page-rect offset, since we're
+        // computing tx/ty directly in viewport-relative space).
+        // Visible custom-rect in viewport coords: starts at (px*s + tx, py*s + ty),
+        // extends to (px*s + tx + pw, py*s + ty + ph).
+        // Want it to cover the viewport — like the default clampPan but
+        // against the custom rect instead of (0, 0, nw, nh).
+        if (pw >= vw) {
+          tx = clamp(tx, vw - pw - px * s, 0 - px * s);
+        } else {
+          tx = (vw - pw) / 2 - px * s;
+        }
+        if (ph >= vh) {
+          ty = clamp(ty, vh - ph - py * s, 0 - py * s);
+        } else {
+          ty = (vh - ph) / 2 - py * s;
+        }
+        return;
+      }
       if (infiniteCanvas) return;
       var w = nw * s, h = nh * s;
       if (w >= vw) { tx = clamp(tx, vw - w, 0); } else { tx = (vw - w) / 2; }
@@ -501,10 +742,76 @@
     }
 
     function setTransform(nextTx, nextTy, nextS) {
+      // Any direct setTransform cancels an in-flight animation —
+      // it's an explicit "go here now" command, not a "glide here"
+      // request. Use animateTo() if you want the animated variant.
+      cancelAnimation();
       tx = nextTx; ty = nextTy;
       s = clamp(nextS, sMin, sMax);
       clampPan();
       requestFrame();
+    }
+
+    // ── Animated transitions (opt-in via handle.fitBounds(rect, {animate})) ─
+    // rAF-driven interpolation between current and target (tx, ty, s).
+    // Cancellable on user gesture (pointerdown / wheel / dblclick) so
+    // the in-flight glide never blocks the user's intent.
+    var anim = null;
+
+    var easings = {
+      linear:      function(t) { return t; },
+      "ease-out":  function(t) { return 1 - Math.pow(1 - t, 3); },
+      "ease-in":   function(t) { return t * t * t; },
+      "ease-in-out": function(t) {
+        return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      }
+    };
+
+    function cancelAnimation() {
+      if (anim) {
+        if (anim.rafId) {
+          try { window.cancelAnimationFrame(anim.rafId); } catch (_) {}
+        }
+        anim = null;
+      }
+    }
+
+    function animateTo(targetTx, targetTy, targetS, opts) {
+      opts = opts || {};
+      cancelAnimation();
+      var duration = (typeof opts.duration === "number" && opts.duration > 0) ? opts.duration : 200;
+      var easeFn = easings[opts.easing] || easings["ease-out"];
+      var startTx = tx, startTy = ty, startS = s;
+      var clampedTargetS = clamp(targetS, sMin, sMax);
+      var t0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+
+      anim = { rafId: null };
+
+      function step() {
+        if (!anim) return;
+        var now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+        var t = Math.min(1, (now - t0) / duration);
+        var k = easeFn(t);
+        tx = startTx + (targetTx - startTx) * k;
+        ty = startTy + (targetTy - startTy) * k;
+        s = startS + (clampedTargetS - startS) * k;
+        // Don't clampPan during animation — clamp would yank an in-flight
+        // glide if the target lands inside the bounds but interpolation
+        // briefly steps outside.
+        apply();
+        if (t >= 1) {
+          // Final state: apply the engine's full clamp + zoom-event so
+          // the rest pos is canonical.
+          tx = targetTx; ty = targetTy; s = clampedTargetS;
+          clampPan();
+          apply();
+          bus._emit("zoom", { scale: s });
+          anim = null;
+          return;
+        }
+        anim.rafId = window.requestAnimationFrame(step);
+      }
+      anim.rafId = window.requestAnimationFrame(step);
     }
 
     function apply() {
@@ -545,7 +852,17 @@
         gestureStart = {
           kind: "pan",
           tx: tx, ty: ty,
-          x: pts[0].x, y: pts[0].y
+          x: pts[0].x, y: pts[0].y,
+          // `moved` flips true on the first pointermove beyond a 5px
+          // threshold. Used to decide whether pointerup fires a "tap"
+          // event (no movement) or just ends the pan gesture.
+          moved: false,
+          // Last-known client coords so onPointerUp can emit the tap
+          // location even after release.
+          lastClientX: pts[0].x,
+          lastClientY: pts[0].y,
+          // pointerType for the eventual tap payload.
+          pointerType: "mouse"
         };
       } else if (pts.length >= 2) {
         var mid = midpoint(pts[0], pts[1]);
@@ -566,11 +883,16 @@
     function onPointerDown(e) {
       if (e.pointerType === "mouse" && e.button !== 0) return;
       if (isFromNav(e)) return;
+      cancelAnimation();
       e.preventDefault();
       try { el.setPointerCapture(e.pointerId); } catch (_) {}
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       el.classList.add("fresco--dragging");
       snapshotGesture();
+      // Stash pointerType on the gesture snapshot so tap can report it.
+      if (gestureStart && gestureStart.kind === "pan") {
+        gestureStart.pointerType = e.pointerType || "mouse";
+      }
     }
 
     function onPointerMove(e) {
@@ -579,10 +901,20 @@
       if (!gestureStart) return;
 
       if (gestureStart.kind === "pan") {
+        // Track tap-vs-drag: any movement past 5px disqualifies the
+        // upcoming pointerup from firing a "tap" event.
+        if (!gestureStart.moved) {
+          var ddx = e.clientX - gestureStart.x;
+          var ddy = e.clientY - gestureStart.y;
+          if (ddx * ddx + ddy * ddy > 25) gestureStart.moved = true;
+        }
+        gestureStart.lastClientX = e.clientX;
+        gestureStart.lastClientY = e.clientY;
         // panLocked suppresses single-pointer drag entirely. Two-pointer
         // pinch (handled below) still works for zoom. setZoomFloor /
         // setZoomCeiling are honored implicitly via zoomAt's clamp.
         if (panLocked) return;
+        if (!gestureEnabled("pan")) return;
         var dx = e.clientX - gestureStart.x;
         var dy = e.clientY - gestureStart.y;
         tx = gestureStart.tx + dx;
@@ -594,6 +926,7 @@
       }
 
       if (gestureStart.kind === "pinch") {
+        if (!gestureEnabled("pinch")) return;
         var pts = Array.from(pointers.values());
         if (pts.length < 2) return;
         var newDist = distance(pts[0], pts[1]);
@@ -617,13 +950,36 @@
     }
 
     function onPointerUp(e) {
+      // Capture tap snapshot before mutating pointer state. Tap fires
+      // only when the gesture was single-pointer and stayed below the
+      // 5px movement threshold throughout. Touch and pen taps also
+      // qualify — useful for swipe-paged readers that need tap-to-turn
+      // semantics without re-rolling drag-vs-tap detection.
+      var tapCandidate = (
+        pointers.size === 1 &&
+        gestureStart && gestureStart.kind === "pan" && !gestureStart.moved
+      ) ? gestureStart : null;
+
       pointers.delete(e.pointerId);
       try { el.releasePointerCapture(e.pointerId); } catch (_) {}
       if (pointers.size >= 1) {
         snapshotGesture();
-      } else {
-        gestureStart = null;
-        el.classList.remove("fresco--dragging");
+        return;
+      }
+      gestureStart = null;
+      el.classList.remove("fresco--dragging");
+
+      if (tapCandidate && e.type !== "pointercancel") {
+        var rect = viewportRect();
+        var localX = tapCandidate.lastClientX - rect.left;
+        var localY = tapCandidate.lastClientY - rect.top;
+        bus._emit("tap", {
+          x: localX,
+          y: localY,
+          imageX: (localX - tx) / s,
+          imageY: (localY - ty) / s,
+          pointerType: tapCandidate.pointerType || e.pointerType || "mouse"
+        });
       }
     }
 
@@ -631,6 +987,8 @@
 
     function onWheel(e) {
       if (isFromNav(e)) return;
+      if (!gestureEnabled("wheel")) return;
+      cancelAnimation();
       e.preventDefault();
       var rect = viewportRect();
       var px = e.clientX - rect.left;
@@ -641,6 +999,8 @@
 
     function onDblClick(e) {
       if (isFromNav(e)) return;
+      if (!gestureEnabled("double_click")) return;
+      cancelAnimation();
       var rect = viewportRect();
       zoomAt(e.clientX - rect.left, e.clientY - rect.top, 2);
     }
@@ -648,6 +1008,7 @@
     function onKeyDown(e) {
       var t = e.target;
       if (t && t !== el && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (!gestureEnabled("keyboard")) return;
       var handled = true;
       switch (e.key) {
         case "ArrowUp":    panBy(0, 60);  break;
@@ -656,7 +1017,7 @@
         case "ArrowRight": panBy(-60, 0); break;
         case "+": case "=": zoomAt(vw / 2, vh / 2, 1.4); break;
         case "-": case "_": zoomAt(vw / 2, vh / 2, 1 / 1.4); break;
-        case "0": fit(); break;
+        case "0": requestHome(); break;
         case "f": case "F": toggleFullscreen(); break;
         default: handled = false;
       }
@@ -682,7 +1043,7 @@
     el.addEventListener("dragstart", onDragStart);
 
     var navEl = buildNav(el, {
-      onFit: fit,
+      onFit: function() { requestHome(); },
       onZoomIn: function() {
         var rect = viewportRect();
         vw = rect.width; vh = rect.height;
@@ -694,6 +1055,8 @@
         zoomAt(vw / 2, vh / 2, 1 / 1.4);
       },
       onFullscreen: toggleFullscreen
+    }, {
+      navButtonEnabled: function(name) { return navButtonEnabled(name); }
     });
 
     var resizeObserver = null;
@@ -764,6 +1127,54 @@
     // zoomed in).
     function setPanLocked(b) { panLocked = !!b; }
 
+    // Clamp pan to a custom rect (canvas-pixel coords). Overrides
+    // infinite_canvas's no-clamp contract. Pass null to revert.
+    // Triggers an immediate re-clamp + frame so the new constraint
+    // applies on the next paint.
+    function setPanBounds(rect) {
+      customPanBounds = (rect && typeof rect.x === "number" &&
+                                  typeof rect.y === "number" &&
+                                  typeof rect.width === "number" &&
+                                  typeof rect.height === "number") ? rect : null;
+      clampPan();
+      requestFrame();
+    }
+
+    // Override the "home" action (nav reset button + `0` key). The
+    // engine's fit() primitive is unaffected; only the user-triggered
+    // home affordances route through the override when set. Pass null
+    // to revert.
+    function setHomeAction(fn) {
+      customHome = (typeof fn === "function") ? fn : null;
+    }
+
+    function requestHome() {
+      if (customHome) {
+        try { customHome(); } catch (e) {
+          if (typeof console !== "undefined" && console.error) {
+            console.error("[Fresco] customHome threw:", e);
+          }
+        }
+      } else {
+        fit();
+      }
+    }
+
+    // Allowlists. Passing an array of strings limits which gestures
+    // and nav buttons are enabled. null = all enabled (default).
+    function setEnabledGestures(arr) {
+      enabledGestures = Array.isArray(arr) ? new Set(arr) : null;
+    }
+    function setEnabledNavButtons(arr) {
+      enabledNavButtons = Array.isArray(arr) ? new Set(arr) : null;
+    }
+    function gestureEnabled(name) {
+      return enabledGestures == null || enabledGestures.has(name);
+    }
+    function navButtonEnabled(name) {
+      return enabledNavButtons == null || enabledNavButtons.has(name);
+    }
+
     return {
       el: el,
       stage: stage,
@@ -784,6 +1195,15 @@
       setZoomFloor: setZoomFloor,
       setZoomCeiling: setZoomCeiling,
       setPanLocked: setPanLocked,
+      setPanBounds: setPanBounds,
+      setHomeAction: setHomeAction,
+      requestHome: requestHome,
+      setEnabledGestures: setEnabledGestures,
+      setEnabledNavButtons: setEnabledNavButtons,
+      gestureEnabled: gestureEnabled,
+      navButtonEnabled: navButtonEnabled,
+      animateTo: animateTo,
+      cancelAnimation: cancelAnimation,
       teardown: teardown
     };
   }
@@ -813,10 +1233,16 @@
     var infiniteCanvas = el.dataset.infiniteCanvas === "true";
     var currentSrc = img.getAttribute("src") || el.dataset.src || "";
 
+    var attrOpts = readConstraintAttrs(el);
     var engine = createTransformEngine({
       el: el,
       stage: stage,
       infiniteCanvas: infiniteCanvas,
+      zoomFloor: attrOpts.zoomFloor,
+      zoomCeiling: attrOpts.zoomCeiling,
+      panLocked: attrOpts.panLocked,
+      gestures: attrOpts.gestures,
+      navButtons: attrOpts.navButtons,
       getNaturalSize: function() {
         return {
           w: img.naturalWidth || img.width || 0,
@@ -831,25 +1257,49 @@
       }
     });
 
+    function markReady() {
+      // CSS rule `.fresco-viewer:not(.fresco--ready) .fresco-stage img`
+      // hides the img until this class is on the host. Without it, a
+      // high-res image renders at natural size in the DOM (clipped to
+      // top-left by `overflow: hidden`) during the load window — the
+      // user sees a chunk of the natural image and can't pan to the
+      // rest. The class flips on the first successful fit or on error.
+      el.classList.add("fresco--ready");
+    }
+
     function doFit() {
       engine.fit();
       engine.setReady(true);
+      markReady();
       engine.bus._emit("open", {
         src: currentSrc,
         naturalWidth: img.naturalWidth,
         naturalHeight: img.naturalHeight
       });
-    }
-
-    function initEngineFromImg() {
+      // Kick off decode() AFTER fitting. The old code waited on decode
+      // before fitting, which for huge images (multi-second decode)
+      // left the image visible at natural size in the meantime. We
+      // need the natural dimensions, not the decoded bitmap, to fit.
+      // The browser will GPU-upload the bitmap asynchronously; the
+      // worst case is a brief blur on the first frame.
       if (typeof img.decode === "function") {
-        img.decode().then(doFit, doFit);
-      } else {
-        doFit();
+        try { img.decode().catch(function() {}); } catch (_) {}
       }
     }
 
+    function initEngineFromImg() { doFit(); }
     function onImgLoad() { initEngineFromImg(); }
+
+    function onImgError() {
+      // Image failed to load. Mark the engine ready anyway so the UI
+      // is responsive — the host will show whatever the browser
+      // renders for a broken image (usually a placeholder icon). A
+      // bus "error" event lets consumers surface a friendlier
+      // message of their own.
+      engine.setReady(true);
+      markReady();
+      engine.bus._emit("error", { src: currentSrc });
+    }
 
     function setSource(url) {
       if (!url) return;
@@ -863,7 +1313,9 @@
         return;
       }
       engine.setReady(false);
+      el.classList.remove("fresco--ready");
       img.addEventListener("load", onImgLoad, { once: true });
+      img.addEventListener("error", onImgError, { once: true });
       img.src = resolved.url;
     }
 
@@ -883,6 +1335,7 @@
         img.removeEventListener("load", once);
         engine.refresh();
         engine.setTransform(t0.tx, t0.ty, t0.s);
+        markReady();
         engine.bus._emit("open", {
           src: currentSrc,
           naturalWidth: img.naturalWidth,
@@ -892,10 +1345,22 @@
       img.src = resolved.url;
     }
 
-    if (img.complete && img.naturalWidth > 0) {
+    // Init as soon as natural dimensions are available (which is
+    // typically the moment the header bytes are decoded, well before
+    // the full image is loaded). This avoids the long "top-left
+    // clipped chunk" window for high-res images. If naturalWidth
+    // isn't there yet, wait on `load` / `error`.
+    if (img.naturalWidth > 0) {
       initEngineFromImg();
+      // Re-run on load as well, in case naturalWidth wasn't final
+      // when we ran the first fit (rare but possible for streaming
+      // image formats).
+      if (!img.complete) {
+        img.addEventListener("load", onImgLoad, { once: true });
+      }
     } else {
       img.addEventListener("load", onImgLoad, { once: true });
+      img.addEventListener("error", onImgError, { once: true });
     }
 
     // Apply opt-in zoom/pan constraint attrs (data-zoom-floor /
@@ -966,13 +1431,20 @@
       };
     }
 
-    function fitBounds(rect) {
+    function fitBounds(rect, opts) {
       if (!rect || rect.width <= 0 || rect.height <= 0) return;
       var v = controller.getViewportSize();
       var newS = Math.min(v.vw / rect.width, v.vh / rect.height);
       var newTx = (v.vw - newS * rect.width) / 2 - newS * rect.x;
       var newTy = (v.vh - newS * rect.height) / 2 - newS * rect.y;
-      controller.setTransform(newTx, newTy, newS);
+      if (opts && opts.animate) {
+        controller.animateTo(newTx, newTy, newS, {
+          duration: opts.duration,
+          easing: opts.easing
+        });
+      } else {
+        controller.setTransform(newTx, newTy, newS);
+      }
     }
 
     return {
@@ -1069,6 +1541,21 @@
     }
     imgs.forEach(applyImgResets);
 
+    // Set of image ids the consumer has explicitly hidden via
+    // setImageVisible(id, false). Hidden imgs are still in `imgs` and
+    // still participate in layout / pan-bounds math; applyChildren just
+    // sets visibility:hidden on them and skips position writes (cheap
+    // optimization).
+    var hiddenImageIds = new Set();
+
+    // Memory windowing — 0/null disables. When > 0, the engine evicts
+    // src for images whose canvas-pixel rect is more than `memoryWindow`
+    // viewport-widths/heights away from the current viewport. Frame
+    // counter throttles the recomputation to once every 8 animation
+    // frames so pan doesn't tank.
+    var memoryWindow = 0;
+    var memoryFrameCounter = 0;
+
     function imgRect(im) {
       var x = parseFloat(im.dataset.canvasX) || 0;
       var y = parseFloat(im.dataset.canvasY) || 0;
@@ -1085,14 +1572,26 @@
       return { x: x, y: y, width: w, height: h };
     }
 
+    var canvasAttrOpts = readConstraintAttrs(el);
     var engine = createTransformEngine({
       el: el,
       stage: stage,
       infiniteCanvas: infiniteCanvas,
+      zoomFloor: canvasAttrOpts.zoomFloor,
+      zoomCeiling: canvasAttrOpts.zoomCeiling,
+      panLocked: canvasAttrOpts.panLocked,
+      gestures: canvasAttrOpts.gestures,
+      navButtons: canvasAttrOpts.navButtons,
       getNaturalSize: function() { return { w: canvasW, h: canvasH }; },
       applyChildren: function(s) {
         for (var i = 0; i < imgs.length; i++) {
           var im = imgs[i];
+          var hidden = hiddenImageIds.has(im.dataset.imageId);
+          if (hidden) {
+            im.style.visibility = "hidden";
+            continue;
+          }
+          if (im.style.visibility === "hidden") im.style.visibility = "";
           var r = imgRect(im);
           im.style.left = (r.x * s) + "px";
           im.style.top = (r.y * s) + "px";
@@ -1108,9 +1607,59 @@
     // known immediately — no need to wait for image loads. Per-image natural
     // dims arrive later via load events; we requestFrame on each load so
     // heights derived from natural aspect ratio settle in cleanly.
+    //
+    // 0.6.0 — `:initial_fit_image_id` / `:initial_fit_bounds` data-attrs
+    // override the canvas-wide fit at first paint. image-id wins if both
+    // present. If image-id doesn't match any image, console.warn and
+    // fall back to the canvas-wide fit.
     function initialFit() {
-      engine.fit();
+      var initialImageId = el.dataset.initialFitImageId || null;
+      var initialBoundsJson = el.dataset.initialFitBounds || null;
+      var initialBounds = null;
+      if (initialBoundsJson) {
+        try {
+          initialBounds = JSON.parse(initialBoundsJson);
+        } catch (_) {
+          console.warn("[Fresco] data-initial-fit-bounds is not valid JSON; falling back to canvas fit");
+        }
+      }
+      var fitDone = false;
+      if (initialImageId) {
+        var b = imageBoundsFor(initialImageId);
+        if (b) {
+          // Manual fitBounds (we can't call the handle method yet — handle
+          // is constructed after this function).
+          var v = engine.getViewportSize();
+          var newS = Math.min(v.vw / b.width, v.vh / b.height);
+          var newTx = (v.vw - newS * b.width) / 2 - newS * b.x;
+          var newTy = (v.vh - newS * b.height) / 2 - newS * b.y;
+          engine.setTransform(newTx, newTy, newS);
+          fitDone = true;
+        } else {
+          console.warn(
+            "[Fresco] data-initial-fit-image-id=\"" + initialImageId +
+            "\" doesn't match any image; falling back to canvas fit"
+          );
+        }
+      }
+      if (!fitDone && initialBounds && typeof initialBounds.x === "number" &&
+          typeof initialBounds.y === "number" &&
+          typeof initialBounds.width === "number" &&
+          typeof initialBounds.height === "number" &&
+          initialBounds.width > 0 && initialBounds.height > 0) {
+        var v2 = engine.getViewportSize();
+        var newS2 = Math.min(v2.vw / initialBounds.width, v2.vh / initialBounds.height);
+        var newTx2 = (v2.vw - newS2 * initialBounds.width) / 2 - newS2 * initialBounds.x;
+        var newTy2 = (v2.vh - newS2 * initialBounds.height) / 2 - newS2 * initialBounds.y;
+        engine.setTransform(newTx2, newTy2, newS2);
+        fitDone = true;
+      }
+      if (!fitDone) engine.fit();
       engine.setReady(true);
+      // CSS rule `.fresco-viewer:not(.fresco--ready) .fresco-stage img`
+      // hides the imgs until first fit. Canvas knows dims at mount so
+      // we apply the class right after initialFit — no flash window.
+      el.classList.add("fresco--ready");
       engine.bus._emit("open", {
         canvasWidth: canvasW,
         canvasHeight: canvasH,
@@ -1119,10 +1668,21 @@
     }
     initialFit();
 
-    // Apply opt-in zoom/pan constraint attrs after the initial fit so the
-    // floor is comparable to the just-computed sFit (consumers typically
-    // express the floor in those terms).
+    // 0.5.x leftover — runtime overrides applied after the initial fit so
+    // the floor / lock take effect immediately. Currently a no-op (the
+    // engine reads everything from opts at construction now); kept as a
+    // safe extension point for future post-construct attrs.
     applyConstraintAttrs(el, engine);
+
+    // 0.6.0 — auto-evict src for images far from the viewport. The attr
+    // reading is here (not in readConstraintAttrs) because memory
+    // windowing is canvas-only and depends on the canvas handle's
+    // imgRect helper.
+    var mw = parseInt(el.dataset.memoryWindow || "0", 10);
+    if (!isNaN(mw) && mw > 0) {
+      memoryWindow = mw;
+      recomputeMemoryWindow();
+    }
 
     function onImgLoad(e) {
       var im = e.target;
@@ -1188,6 +1748,160 @@
       } catch (_) { return undefined; }
     }
 
+    // Toggle individual image visibility without removing it from the
+    // layout (so pan-bounds, annotations, fit math stay anchored).
+    function setImageVisible(id, visible) {
+      if (visible) hiddenImageIds.delete(id);
+      else hiddenImageIds.add(id);
+      engine.requestFrame();
+    }
+
+    // Memory windowing. recomputeWindow() inflates the current viewport
+    // rect (in canvas coords) by `memoryWindow` viewport sizes, then
+    // evicts images outside that rect and restores those inside.
+    function rectsIntersect(a, b) {
+      return !(a.x + a.width <= b.x || b.x + b.width <= a.x ||
+               a.y + a.height <= b.y || b.y + b.height <= a.y);
+    }
+
+    function recomputeMemoryWindow() {
+      if (!memoryWindow || memoryWindow <= 0) return;
+      var t = engine.getTransform();
+      var v = engine.getViewportSize();
+      if (t.s <= 0) return;
+      // Viewport rect in canvas-pixel coords (same as getViewportBounds).
+      var vp = {
+        x: -t.tx / t.s,
+        y: -t.ty / t.s,
+        width: v.vw / t.s,
+        height: v.vh / t.s
+      };
+      // Inflate by N viewport sizes.
+      var padX = vp.width * memoryWindow;
+      var padY = vp.height * memoryWindow;
+      var window = {
+        x: vp.x - padX,
+        y: vp.y - padY,
+        width: vp.width + 2 * padX,
+        height: vp.height + 2 * padY
+      };
+      for (var i = 0; i < imgs.length; i++) {
+        var im = imgs[i];
+        var r = imgRect(im);
+        var inside = rectsIntersect(window, r);
+        if (inside) {
+          // Restore if previously evicted.
+          if (!im.getAttribute("src") && im.dataset.frescoSrc) {
+            im.setAttribute("src", im.dataset.frescoSrc);
+            engine.bus._emit("image-restored", { imageId: im.dataset.imageId });
+          }
+        } else {
+          // Evict. Stash src into data-fresco-src.
+          var src = im.getAttribute("src");
+          if (src) {
+            im.dataset.frescoSrc = src;
+            im.removeAttribute("src");
+            engine.bus._emit("image-evicted", { imageId: im.dataset.imageId });
+          }
+        }
+      }
+    }
+
+    function setMemoryWindow(n) {
+      memoryWindow = (typeof n === "number" && n > 0) ? n : 0;
+      memoryFrameCounter = 0;
+      recomputeMemoryWindow();
+    }
+
+    // Throttle: recompute every 8 animation frames (not every frame).
+    // Also recompute on resize. Hooked here so it's automatic once
+    // setMemoryWindow has been called.
+    engine.bus.on("animation", function() {
+      if (!memoryWindow || memoryWindow <= 0) return;
+      if ((++memoryFrameCounter & 7) === 0) recomputeMemoryWindow();
+    });
+    engine.bus.on("resize", function() {
+      if (memoryWindow && memoryWindow > 0) recomputeMemoryWindow();
+    });
+
+    // ── View tracker — dominant image + focus/blur events ───────────────
+    // Computes the "focused" image as the one with the highest overlap
+    // ratio between its canvas-pixel rect and the current viewport rect.
+    // Honors `hiddenImageIds` (hidden imgs are never dominant). The
+    // tracker handles settle-time gating, page-visibility pause, and
+    // event emission — see createViewTracker for the state machine.
+    function computeViewportRectInCanvas() {
+      var t = engine.getTransform();
+      var v = engine.getViewportSize();
+      if (t.s <= 0) return null;
+      return {
+        x: -t.tx / t.s,
+        y: -t.ty / t.s,
+        width: v.vw / t.s,
+        height: v.vh / t.s
+      };
+    }
+
+    function computeDominantCanvasImage(threshold) {
+      var vp = computeViewportRectInCanvas();
+      if (!vp) return null;
+      var bestId = null;
+      var bestRatio = 0;
+      for (var i = 0; i < imgs.length; i++) {
+        var im = imgs[i];
+        var id = im.dataset.imageId;
+        if (!id) continue;
+        if (hiddenImageIds.has(id)) continue;
+        var r = imgRect(im);
+        if (r.width <= 0 || r.height <= 0) continue;
+        var ox  = Math.max(vp.x, r.x);
+        var oy  = Math.max(vp.y, r.y);
+        var ox2 = Math.min(vp.x + vp.width,  r.x + r.width);
+        var oy2 = Math.min(vp.y + vp.height, r.y + r.height);
+        if (ox2 <= ox || oy2 <= oy) continue;
+        var ratio = ((ox2 - ox) * (oy2 - oy)) / (r.width * r.height);
+        if (ratio < threshold) continue;
+        if (ratio > bestRatio) {
+          bestRatio = ratio;
+          bestId = id;
+        }
+      }
+      return bestId;
+    }
+
+    var viewTracker = createViewTracker({
+      bus: engine.bus,
+      getDominantImageId: computeDominantCanvasImage
+    });
+
+    // Drive the tracker off the engine's per-frame animation event.
+    // tick() is cheap (one rect intersection per image); the settleMs
+    // gate inside the tracker handles pan-throughs.
+    engine.bus.on("animation", function() {
+      if (viewTracker.isEnabled()) viewTracker.tick();
+    });
+
+    // Honor declarative `data-view-tracking` / `-settle-ms` / `-threshold`
+    // attrs at mount. Default off.
+    if (el.dataset.viewTracking === "true") {
+      var trackOpts = {};
+      var sm = parseInt(el.dataset.viewSettleMs || "", 10);
+      if (!isNaN(sm) && sm >= 0) trackOpts.settleMs = sm;
+      var th = parseFloat(el.dataset.viewThreshold || "");
+      if (!isNaN(th) && th > 0 && th <= 1) trackOpts.threshold = th;
+      viewTracker.enable(trackOpts);
+    }
+
+    // Tear down on the canvas's destroyed lifecycle — flush a final
+    // view-blur with reason "destroyed" so consumers can persist a
+    // pending duration. Wrap engine.teardown so consumers don't have
+    // to remember a second cleanup call.
+    var originalTeardown = engine.teardown;
+    var teardownWithTracker = function() {
+      if (viewTracker.isEnabled()) viewTracker.disable("destroyed");
+      originalTeardown();
+    };
+
     return {
       el: el,
       stage: stage,
@@ -1208,8 +1922,15 @@
       setZoomFloor: engine.setZoomFloor,
       setZoomCeiling: engine.setZoomCeiling,
       setPanLocked: engine.setPanLocked,
+      setPanBounds: engine.setPanBounds,
+      setHomeAction: engine.setHomeAction,
+      setImageVisible: setImageVisible,
+      setMemoryWindow: setMemoryWindow,
+      enableViewTracking: function(o) { viewTracker.enable(o || {}); },
+      disableViewTracking: function() { viewTracker.disable("disabled"); },
+      getFocusedImage: function() { return viewTracker.getFocused(); },
       refreshLayout: refreshLayout,
-      teardown: engine.teardown
+      teardown: teardownWithTracker
     };
   }
 
@@ -1251,13 +1972,20 @@
       };
     }
 
-    function fitBounds(rect) {
+    function fitBounds(rect, opts) {
       if (!rect || rect.width <= 0 || rect.height <= 0) return;
       var v = controller.getViewportSize();
       var newS = Math.min(v.vw / rect.width, v.vh / rect.height);
       var newTx = (v.vw - newS * rect.width) / 2 - newS * rect.x;
       var newTy = (v.vh - newS * rect.height) / 2 - newS * rect.y;
-      controller.setTransform(newTx, newTy, newS);
+      if (opts && opts.animate) {
+        controller.animateTo(newTx, newTy, newS, {
+          duration: opts.duration,
+          easing: opts.easing
+        });
+      } else {
+        controller.setTransform(newTx, newTy, newS);
+      }
     }
 
     function fitImage(id) {
@@ -1284,6 +2012,12 @@
       setZoomFloor:   function(v) { controller.setZoomFloor(v); },
       setZoomCeiling: function(v) { controller.setZoomCeiling(v); },
       setPanLocked:   function(b) { controller.setPanLocked(b); },
+      // 0.5.2+ view-tracking — emits "view-focus" / "view-blur" on
+      // the bus when the dominant image changes. Default off; enable
+      // explicitly to start.
+      enableViewTracking:  function(o) { controller.enableViewTracking(o || {}); },
+      disableViewTracking: function() { controller.disableViewTracking(); },
+      getFocusedImage:     function() { return controller.getFocusedImage(); },
       on: bus.on,
       _emit: bus._emit,
       appendNavButton: function(svg, title, onClick) {
@@ -1616,6 +2350,35 @@
         self.handleEvent("phx:scroll-to", self._onServerScroll);
       }
 
+      // ---- View tracker -----------------------------------------------------
+      // Emits "view-focus" / "view-blur" on the bus when the dominant
+      // image (the strip's `currentImageIdx`) changes. The settleMs
+      // gate filters out fly-throughs during fast scroll. Default off;
+      // opt in via `data-view-tracking="true"` on the host or
+      // `handle.enableViewTracking()` at runtime.
+      var stripViewTracker = createViewTracker({
+        bus: handle,
+        getDominantImageId: function() {
+          return state.currentImageIdx == null ? null : String(state.currentImageIdx);
+        }
+      });
+      self.viewTracker = stripViewTracker;
+
+      // Drive tick off the strip's own viewport-change event (which
+      // fires from `onScrollTick` whenever the dominant index changes).
+      handle.on("viewport-change", function() {
+        if (stripViewTracker.isEnabled()) stripViewTracker.tick();
+      });
+
+      // Wire handle methods so the strip handle exposes the same
+      // view-tracking surface as the canvas handle. Done after the
+      // strip handle was already published — but the methods are
+      // installed directly onto the handle object so onReady consumers
+      // see them on first lookup.
+      handle.enableViewTracking  = function(o) { stripViewTracker.enable(o || {}); };
+      handle.disableViewTracking = function() { stripViewTracker.disable("disabled"); };
+      handle.getFocusedImage     = function() { return stripViewTracker.getFocused(); };
+
       // ---- Mount sequencing -------------------------------------------------
 
       var initial = computeDominantImage();
@@ -1630,6 +2393,16 @@
         fractionWithin: state.fractionWithin
       });
       handle._emit("open", { sources: sources });
+
+      // Honor declarative `data-view-tracking` / `-settle-ms` attrs at
+      // mount. Default off. (Strip has no threshold concept — its
+      // dominant-image is computed by closest-to-viewport-center.)
+      if (container.dataset.viewTracking === "true") {
+        var stripOpts = {};
+        var sm = parseInt(container.dataset.viewSettleMs || "", 10);
+        if (!isNaN(sm) && sm >= 0) stripOpts.settleMs = sm;
+        stripViewTracker.enable(stripOpts);
+      }
     },
 
     updated: function() {
@@ -1643,6 +2416,12 @@
         this.el.removeEventListener("scroll", this._onScroll);
         this._onScroll = null;
       }
+      // Flush a final view-blur with reason "destroyed" so consumers
+      // can persist a pending duration on the way out.
+      if (this.viewTracker && this.viewTracker.isEnabled()) {
+        this.viewTracker.disable("destroyed");
+      }
+      this.viewTracker = null;
       this.handle = null;
       this.sources = null;
     }

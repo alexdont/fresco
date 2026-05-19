@@ -163,6 +163,33 @@ defmodule Fresco.ScrollStrip do
     """
   )
 
+  attr(:view_tracking, :boolean,
+    default: false,
+    doc: """
+    Enables the `view-focus` / `view-blur` event channel for reading-
+    time / engagement analytics on the strip. Same semantics as
+    `<Fresco.canvas>`'s `:view_tracking`: when `true`, the engine
+    watches which image is dominant and emits paired focus/blur events
+    when it changes.
+
+    The strip's notion of "dominant" is the existing `currentImageIdx`
+    (image whose center is closest to the viewport center) — same
+    image that drives the `viewport-change` event. The view-tracking
+    layer adds a settle-time gate (so fast scrolls don't emit a focus
+    for every page flown past) and a Page Visibility pause.
+
+    Defaults to `false` so consumers who don't subscribe pay zero cost.
+    """
+  )
+
+  attr(:view_settle_ms, :integer,
+    default: 150,
+    doc: """
+    Milliseconds the dominant image must hold before `view-focus`
+    fires. Only consulted when `:view_tracking` is `true`. Default `150`.
+    """
+  )
+
   attr(:rest, :global)
 
   @doc """
@@ -192,6 +219,8 @@ defmodule Fresco.ScrollStrip do
       data-gap-px={Integer.to_string(@gap_px_int)}
       data-snap={Atom.to_string(@snap_to_image)}
       data-fresco-theme={to_string(@theme)}
+      data-view-tracking={@view_tracking && "true"}
+      data-view-settle-ms={@view_tracking && Integer.to_string(@view_settle_ms)}
       class={["fresco-strip", "overflow-y-auto", scroll_snap_class(@snap_to_image), @class]}
       {@rest}
     >

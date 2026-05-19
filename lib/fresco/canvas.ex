@@ -560,6 +560,113 @@ defmodule Fresco.Canvas do
     """
   )
 
+  attr(:initial_fit_image_id, :string,
+    default: nil,
+    doc: """
+    If set, the engine lands at the fit-to-viewport position for the
+    image with this `:id` at first paint instead of fitting the whole
+    canvas. Avoids the brief flash of "whole-canvas visible" before an
+    `onReady` callback re-fits.
+
+    Falls back to canvas-wide fit (with a `console.warn`) if no image
+    matches the id. If both `:initial_fit_image_id` and
+    `:initial_fit_bounds` are provided, image-id wins.
+    """
+  )
+
+  attr(:initial_fit_bounds, :map,
+    default: nil,
+    doc: """
+    Like `:initial_fit_image_id` but for a custom rect. Map of
+    `%{x: number, y: number, width: number, height: number}` in
+    canvas-pixel coords. Serialized to JSON onto a `data-*` attr and
+    parsed by the JS engine at mount.
+    """
+  )
+
+  attr(:memory_window, :integer,
+    default: nil,
+    doc: """
+    Auto-evict `src` for images more than this many viewport-widths/
+    heights from the current viewport. Same memory-saving trick
+    `<Fresco.scroll_strip>` uses, generalized to 2D canvas layouts.
+
+    A value of `2` keeps a 5×5 viewport-rect window of images loaded
+    around the current view (1 viewport in the center + 2 viewports of
+    padding on each side). Default `nil` = disabled. Evicted images can
+    be detected via `handle.on("image-evicted", e => ...)` /
+    `image-restored` events.
+    """
+  )
+
+  attr(:gestures, :list,
+    default: nil,
+    doc: """
+    Allowlist of enabled gestures. Atom list:
+    `[:pan, :pinch, :wheel, :double_click, :keyboard]`. Default `nil`
+    enables all. Omitted entries are disabled.
+
+    Useful for kiosks (drop `:keyboard`), swipe-paged readers that handle
+    their own page-turn taps (drop `:double_click`), embedded viewers
+    that defer scroll to the page (drop `:wheel`).
+    """
+  )
+
+  attr(:nav_buttons, :list,
+    default: nil,
+    doc: """
+    Allowlist of enabled built-in nav buttons. Atom list:
+    `[:home, :zoom_in, :zoom_out, :fullscreen]`. Default `nil` enables
+    all. Omitted entries are hidden.
+    """
+  )
+
+  attr(:view_tracking, :boolean,
+    default: false,
+    doc: """
+    Enables the `view-focus` / `view-blur` event channel for reading-
+    time / engagement analytics. When `true`, the engine watches which
+    image is dominant in the viewport and emits paired focus/blur
+    events on the bus when that image changes. Defaults to `false` so
+    consumers who don't subscribe pay zero cost.
+
+    Consumer-side:
+
+        handle.on("view-focus", e => {
+          // e.imageId, e.previousImageId, e.atMs
+        })
+
+        handle.on("view-blur", e => {
+          // e.imageId, e.durationMs, e.atMs, e.reason
+          // e.reason ∈ "viewport-change" | "page-hidden" | "disabled" | "destroyed"
+        })
+
+    Runtime alternatives if you want to toggle tracking on/off without
+    a re-render: `handle.enableViewTracking(opts)` /
+    `handle.disableViewTracking()` / `handle.getFocusedImage()`.
+    """
+  )
+
+  attr(:view_settle_ms, :integer,
+    default: 150,
+    doc: """
+    Milliseconds the viewport must stay on a new dominant image before
+    `view-focus` fires. Filters out pan-throughs and momentum-scroll
+    fly-bys so analytics events only fire on actual reads. Only
+    consulted when `:view_tracking` is `true`. Default `150`.
+    """
+  )
+
+  attr(:view_threshold, :float,
+    default: 0.5,
+    doc: """
+    Fraction of an image's area that must intersect the viewport for
+    it to qualify as "dominant". Lower values make focus changes more
+    eager; higher values make focus stickier. Only consulted when
+    `:view_tracking` is `true`. Default `0.5`.
+    """
+  )
+
   attr(:rest, :global)
 
   @doc """
@@ -582,6 +689,9 @@ defmodule Fresco.Canvas do
       |> assign(:sorted_images, sorted_images)
       |> assign(:extensions_json, Jason.encode!(canvas_struct.extensions))
       |> assign(:bg_style, background_style(canvas_struct.canvas))
+      |> assign(:initial_fit_bounds_json, encode_initial_bounds(assigns[:initial_fit_bounds]))
+      |> assign(:gestures_csv, atoms_to_csv(assigns[:gestures]))
+      |> assign(:nav_buttons_csv, atoms_to_csv(assigns[:nav_buttons]))
 
     ~H"""
     <div
@@ -596,6 +706,14 @@ defmodule Fresco.Canvas do
       data-zoom-floor={@zoom_floor && to_string(@zoom_floor)}
       data-zoom-ceiling={@zoom_ceiling && to_string(@zoom_ceiling)}
       data-pan-locked={@pan_locked && "true"}
+      data-initial-fit-image-id={@initial_fit_image_id}
+      data-initial-fit-bounds={@initial_fit_bounds_json}
+      data-memory-window={@memory_window && Integer.to_string(@memory_window)}
+      data-gestures={@gestures_csv}
+      data-nav-buttons={@nav_buttons_csv}
+      data-view-tracking={@view_tracking && "true"}
+      data-view-settle-ms={@view_tracking && Integer.to_string(@view_settle_ms)}
+      data-view-threshold={@view_tracking && to_string(@view_threshold)}
       class={[
         "fresco-viewer",
         @class,
@@ -626,6 +744,23 @@ defmodule Fresco.Canvas do
   end
 
   defp canvas_dim(canvas, key), do: "#{Map.get(canvas, key, 0)}"
+
+  # JSON-encode the :initial_fit_bounds map for the data attr. Nil maps
+  # through to nil (attr omitted).
+  defp encode_initial_bounds(nil), do: nil
+  defp encode_initial_bounds(bounds) when is_map(bounds), do: Jason.encode!(bounds)
+
+  # Turn a list of atoms (`[:pan, :pinch]`) into a CSV string the JS
+  # engine can split (`"pan,pinch"`). Nil passes through so the attr is
+  # omitted entirely, meaning "no allowlist; everything enabled."
+  defp atoms_to_csv(nil), do: nil
+  defp atoms_to_csv([]), do: nil
+
+  defp atoms_to_csv(list) when is_list(list) do
+    list
+    |> Enum.map(&Atom.to_string/1)
+    |> Enum.join(",")
+  end
 
   defp background_style(%{background: nil}), do: nil
 

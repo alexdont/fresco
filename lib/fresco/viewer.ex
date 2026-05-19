@@ -135,6 +135,24 @@ defmodule Fresco.Viewer do
     """
   )
 
+  attr(:gestures, :list,
+    default: nil,
+    doc: """
+    Allowlist of enabled gestures. Atom list:
+    `[:pan, :pinch, :wheel, :double_click, :keyboard]`. Default `nil`
+    enables all. Omitted entries are disabled.
+    """
+  )
+
+  attr(:nav_buttons, :list,
+    default: nil,
+    doc: """
+    Allowlist of enabled built-in nav buttons. Atom list:
+    `[:home, :zoom_in, :zoom_out, :fullscreen]`. Default `nil` enables
+    all. Omitted entries are hidden.
+    """
+  )
+
   attr(:rest, :global)
 
   @doc """
@@ -144,6 +162,11 @@ defmodule Fresco.Viewer do
   viewport, and publishes the handle for peer extensions.
   """
   def viewer(assigns) do
+    assigns =
+      assigns
+      |> assign(:gestures_csv, atoms_to_csv(assigns[:gestures]))
+      |> assign(:nav_buttons_csv, atoms_to_csv(assigns[:nav_buttons]))
+
     ~H"""
     <div
       id={@id}
@@ -155,6 +178,8 @@ defmodule Fresco.Viewer do
       data-zoom-floor={@zoom_floor && to_string(@zoom_floor)}
       data-zoom-ceiling={@zoom_ceiling && to_string(@zoom_ceiling)}
       data-pan-locked={@pan_locked && "true"}
+      data-gestures={@gestures_csv}
+      data-nav-buttons={@nav_buttons_csv}
       class={[
         "fresco-viewer",
         @class,
@@ -168,5 +193,14 @@ defmodule Fresco.Viewer do
       </div>
     </div>
     """
+  end
+
+  defp atoms_to_csv(nil), do: nil
+  defp atoms_to_csv([]), do: nil
+
+  defp atoms_to_csv(list) when is_list(list) do
+    list
+    |> Enum.map(&Atom.to_string/1)
+    |> Enum.join(",")
   end
 end

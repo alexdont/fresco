@@ -105,6 +105,34 @@ defmodule FrescoTest do
       html = render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg", pan_locked: true)
       assert html =~ ~s(data-pan-locked="true")
     end
+
+    test "gestures / nav_buttons default to omitted (back-compat)" do
+      html = render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg")
+      refute html =~ "data-gestures"
+      refute html =~ "data-nav-buttons"
+    end
+
+    test "gestures renders CSV of atom names" do
+      html =
+        render_component(&Fresco.viewer/1,
+          id: "v",
+          src: "/x.jpg",
+          gestures: [:pan, :pinch, :wheel]
+        )
+
+      assert html =~ ~s(data-gestures="pan,pinch,wheel")
+    end
+
+    test "nav_buttons renders CSV of atom names" do
+      html =
+        render_component(&Fresco.viewer/1,
+          id: "v",
+          src: "/x.jpg",
+          nav_buttons: [:zoom_in, :zoom_out, :home]
+        )
+
+      assert html =~ ~s(data-nav-buttons="zoom_in,zoom_out,home")
+    end
   end
 
   describe "Fresco.canvas/1" do
@@ -285,6 +313,133 @@ defmodule FrescoTest do
       html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas, pan_locked: true)
       assert html =~ ~s(data-pan-locked="true")
     end
+
+    test "initial_fit_image_id / initial_fit_bounds / memory_window / gestures / nav_buttons default to omitted" do
+      canvas = build_canvas()
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas)
+      refute html =~ "data-initial-fit-image-id"
+      refute html =~ "data-initial-fit-bounds"
+      refute html =~ "data-memory-window"
+      refute html =~ "data-gestures"
+      refute html =~ "data-nav-buttons"
+    end
+
+    test "initial_fit_image_id renders the data attribute" do
+      canvas = build_canvas(images: [%{src: "/a.jpg", x: 0, y: 0, width: 100}])
+
+      html =
+        render_component(&Fresco.canvas/1,
+          id: "b",
+          canvas: canvas,
+          initial_fit_image_id: "img-1"
+        )
+
+      assert html =~ ~s(data-initial-fit-image-id="img-1")
+    end
+
+    test "initial_fit_bounds renders JSON-encoded bounds" do
+      canvas = build_canvas()
+
+      html =
+        render_component(&Fresco.canvas/1,
+          id: "b",
+          canvas: canvas,
+          initial_fit_bounds: %{x: 100, y: 200, width: 300, height: 400}
+        )
+
+      # HEEx HTML-escapes the JSON quotes; assert against the escaped form.
+      assert html =~ "data-initial-fit-bounds="
+      assert html =~ ~s(&quot;x&quot;:100)
+      assert html =~ ~s(&quot;y&quot;:200)
+      assert html =~ ~s(&quot;width&quot;:300)
+      assert html =~ ~s(&quot;height&quot;:400)
+    end
+
+    test "memory_window renders the data attribute" do
+      canvas = build_canvas()
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas, memory_window: 2)
+      assert html =~ ~s(data-memory-window="2")
+    end
+
+    test "gestures renders CSV of atom names" do
+      canvas = build_canvas()
+
+      html =
+        render_component(&Fresco.canvas/1,
+          id: "b",
+          canvas: canvas,
+          gestures: [:pan, :pinch, :wheel]
+        )
+
+      assert html =~ ~s(data-gestures="pan,pinch,wheel")
+    end
+
+    test "nav_buttons renders CSV of atom names" do
+      canvas = build_canvas()
+
+      html =
+        render_component(&Fresco.canvas/1,
+          id: "b",
+          canvas: canvas,
+          nav_buttons: [:zoom_in, :zoom_out, :home]
+        )
+
+      assert html =~ ~s(data-nav-buttons="zoom_in,zoom_out,home")
+    end
+
+    test "empty gestures list (e.g. []) is treated as 'no allowlist' and omits the attr" do
+      canvas = build_canvas()
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas, gestures: [])
+      refute html =~ "data-gestures"
+    end
+
+    test "view-tracking attrs default to omitted" do
+      canvas = build_canvas()
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas)
+      refute html =~ "data-view-tracking"
+      refute html =~ "data-view-settle-ms"
+      refute html =~ "data-view-threshold"
+    end
+
+    test "view_tracking=true renders all three data attrs with defaults" do
+      canvas = build_canvas()
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas, view_tracking: true)
+      assert html =~ ~s(data-view-tracking="true")
+      assert html =~ ~s(data-view-settle-ms="150")
+      assert html =~ ~s(data-view-threshold="0.5")
+    end
+
+    test "view_settle_ms / view_threshold render only when view_tracking is on" do
+      canvas = build_canvas()
+
+      html =
+        render_component(&Fresco.canvas/1,
+          id: "b",
+          canvas: canvas,
+          view_tracking: true,
+          view_settle_ms: 250,
+          view_threshold: 0.7
+        )
+
+      assert html =~ ~s(data-view-settle-ms="250")
+      assert html =~ ~s(data-view-threshold="0.7")
+    end
+
+    test "view_settle_ms / view_threshold are inert when view_tracking is off (no data attrs)" do
+      canvas = build_canvas()
+
+      html =
+        render_component(&Fresco.canvas/1,
+          id: "b",
+          canvas: canvas,
+          view_settle_ms: 999,
+          view_threshold: 0.9
+        )
+
+      refute html =~ "data-view-tracking"
+      refute html =~ "data-view-settle-ms"
+      refute html =~ "data-view-threshold"
+    end
   end
 
   describe "Fresco.scroll_strip/1" do
@@ -381,6 +536,25 @@ defmodule FrescoTest do
           sources: [%{url: "/img/p1.jpg", height: 9000}]
         )
       end
+    end
+
+    test "view_tracking attrs default to omitted (strip)" do
+      html = render_component(&Fresco.scroll_strip/1, id: "s", sources: @one_src)
+      refute html =~ "data-view-tracking"
+      refute html =~ "data-view-settle-ms"
+    end
+
+    test "view_tracking=true renders strip data attrs" do
+      html =
+        render_component(&Fresco.scroll_strip/1,
+          id: "s",
+          sources: @one_src,
+          view_tracking: true,
+          view_settle_ms: 200
+        )
+
+      assert html =~ ~s(data-view-tracking="true")
+      assert html =~ ~s(data-view-settle-ms="200")
     end
 
     test "raises ArgumentError when a source is missing :url" do
