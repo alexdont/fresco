@@ -523,6 +523,45 @@ defmodule FrescoTest do
       assert html =~ ~s(/img/p1.jpg)
     end
 
+    test "extensions defaults to %{} → data-extensions attr is omitted" do
+      html = render_component(&Fresco.scroll_strip/1, id: "s", sources: @one_src)
+      refute html =~ "data-extensions"
+    end
+
+    test "extensions renders JSON-encoded data-extensions on the host" do
+      html =
+        render_component(&Fresco.scroll_strip/1,
+          id: "s",
+          sources: @one_src,
+          extensions: %{
+            "etcher" => %{
+              "version" => "1",
+              "annotations" => [%{"uuid" => "01HXY", "image_idx" => 0}]
+            }
+          }
+        )
+
+      assert html =~ "data-extensions="
+      assert html =~ "etcher"
+      assert html =~ "annotations"
+      assert html =~ "01HXY"
+    end
+
+    test "multiple extension keys round-trip through data-extensions" do
+      html =
+        render_component(&Fresco.scroll_strip/1,
+          id: "s",
+          sources: @one_src,
+          extensions: %{
+            "etcher" => %{"annotations" => []},
+            "ml-overlay" => %{"regions" => []}
+          }
+        )
+
+      assert html =~ "etcher"
+      assert html =~ "ml-overlay"
+    end
+
     test "raises ArgumentError on empty :sources" do
       assert_raise ArgumentError, ~r/non-empty :sources/, fn ->
         render_component(&Fresco.scroll_strip/1, id: "s", sources: [])

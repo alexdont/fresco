@@ -4,6 +4,68 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.3 — 2026-05-20
+
+`<Fresco.scroll_strip>` now exposes the same extensions contract as
+`<Fresco.canvas>`, so peer libraries (Etcher, ML overlays, comment
+threads, …) can hydrate on strip-mode chapters identically to canvas
+ones. Pure-additive; existing strip consumers see no change.
+
+### Added
+
+- **`:extensions` attr** on `<Fresco.scroll_strip>` — map, default
+  `%{}`. Rendered as `data-extensions={Jason.encode!(...)}` on the
+  strip host. Consumers pass annotation / overlay state through here
+  the same way they do for `<Fresco.canvas>`. Empty default →
+  `data-extensions` attribute is omitted; no existing markup changes.
+- **`handle.getExtension(name)`** on the strip handle — returns the
+  parsed `extensions[name]` blob (or `undefined` when the attribute
+  is absent / unparseable). Matches the canvas handle's signature
+  exactly, so peer libraries can detect "is this canvas or strip?"
+  via the existing `"scrollTo" in handle` test and then call
+  `getExtension` uniformly.
+- **`handle.getImages()`** on the strip handle — returns a snapshot
+  of the strip's images with their live rendered positions in
+  scroll-container coordinates:
+
+  ```js
+  [
+    { idx: 0, url: "/page-01.jpg", naturalWidth: 720, naturalHeight: 9200,
+      top: 0, height: 1080, element: <img …> },
+    { idx: 1, url: "/page-02.jpg", naturalWidth: 720, naturalHeight: 8800,
+      top: 1080, height: 1032, element: <img …> },
+    …
+  ]
+  ```
+
+  Lets extensions position per-image overlay siblings without
+  re-querying the DOM each scroll tick. `top` / `height` are read
+  from each `<img>`'s `offsetTop` / `offsetHeight` and stay valid
+  across memory-windowing evict/restore (aspect-ratio CSS holds
+  the layout). The `element` field is the raw `<img>` DOM node;
+  consumers attach overlay siblings via standard DOM
+  (`element.parentNode.insertBefore(...)`).
+
+### Performance note
+
+`getImages()` forces a synchronous layout flush via `offsetTop` /
+`offsetHeight`. Callers should cache the result and re-query on
+resize / orientation change, not per scroll tick. The strip's
+existing `viewport-change` and `scroll` events are the right
+signals to drive overlay re-positioning if needed (usually not —
+native browser scroll moves the overlay siblings along with the
+imgs they sit next to).
+
+### Why now
+
+Etcher 0.3 doesn't yet support `<Fresco.scroll_strip>` (separate
+Etcher work — strip-renderer module, per-shape `image_idx` binding,
+gesture coordination with native scroll). When that lands, Etcher
+needs a stable Fresco-side contract for hydration and per-image
+layout discovery — the same surface canvas already provides.
+0.5.3 puts that contract in place so the eventual Etcher port can
+attach without coordinated Fresco churn.
+
 ## 0.5.2 — 2026-05-19
 
 Nine additive consumer hooks. Cleans up the workarounds the heaviest

@@ -2171,6 +2171,59 @@
       };
     }
 
+    // Return the parsed `extensions[name]` blob hydrated from the
+    // strip host's `data-extensions` (set by the `:extensions`
+    // component attr). Mirrors the canvas handle. `undefined` when
+    // the attr is absent or unparseable.
+    function getExtension(name) {
+      if (!container) return undefined;
+      var raw = container.dataset.extensions;
+      if (!raw) return undefined;
+      try {
+        var parsed = JSON.parse(raw);
+        return parsed && parsed[name];
+      } catch (_) { return undefined; }
+    }
+
+    // Snapshot of the strip's images with their live rendered
+    // positions in scroll-container coordinates. Peer libraries
+    // (Etcher, ML overlays, …) use this to position per-image
+    // overlay siblings without having to walk the DOM themselves
+    // each scroll tick.
+    //
+    // `top` and `height` come from `offsetTop` / `offsetHeight`
+    // on each img element — they stay valid across memory-windowing
+    // evict/restore because the component sets `aspect-ratio` per
+    // image, which holds the slot regardless of whether `src` is
+    // set.
+    //
+    // Calling this method forces a synchronous layout flush; cache
+    // the result and re-query only on resize / orientation change,
+    // not per scroll. The `element` field on each entry is the raw
+    // <img> DOM node so consumers can `insertBefore` overlay
+    // siblings into the scroll container.
+    function getImages() {
+      if (!container) return [];
+      var imgs = container.querySelectorAll("[data-fresco-strip-img]");
+      var out = [];
+      for (var i = 0; i < imgs.length; i++) {
+        var img = imgs[i];
+        var idx = parseInt(img.dataset.imageIdx, 10);
+        if (isNaN(idx)) idx = i;
+        var src = sources[idx] || {};
+        out.push({
+          idx: idx,
+          url: src.url || img.getAttribute("src") || img.dataset.src || "",
+          naturalWidth: src.width || img.naturalWidth || 0,
+          naturalHeight: src.height || img.naturalHeight || 0,
+          top: img.offsetTop,
+          height: img.offsetHeight,
+          element: img
+        });
+      }
+      return out;
+    }
+
     var handle = {
       container: container,
 
@@ -2179,6 +2232,8 @@
       imageToScreen: imageToScreen,
       screenToImage: screenToImage,
       getScrollState: getScrollState,
+      getExtension: getExtension,
+      getImages: getImages,
 
       on: bus.on,
       _emit: bus._emit,

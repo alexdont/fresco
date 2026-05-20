@@ -70,6 +70,59 @@ defmodule Fresco.ScrollStrip do
       push_event(socket, "phx:scroll-to", %{imageIdx: 5, y: 0, behavior: "smooth"})
 
   The hook forwards the payload straight to `handle.scrollTo/1`.
+
+  ## Attaching annotation tools (or other peer libraries)
+
+  `<Fresco.scroll_strip>` doesn't use a `%Fresco.Canvas{}` struct — its
+  state is just `:sources` + (since 0.5.3) `:extensions`, both passed
+  directly via assigns. To wire something like Etcher (when its
+  strip-renderer port lands), keep an `:extensions` map in your
+  LiveView assigns and re-render through it:
+
+      def mount(_params, _session, socket) do
+        sources = ... # %{url, width, height} list, loaded from your storage
+        extensions = ... # %{"etcher" => %{"version" => "1", "annotations" => [...]}}
+                          # — or %{} if you don't have any yet
+
+        {:ok, assign(socket, sources: sources, extensions: extensions)}
+      end
+
+      def handle_event("etcher:annotations-changed", %{"annotations" => annotations}, socket) do
+        new_extensions =
+          Map.put(socket.assigns.extensions, "etcher", %{
+            "version" => "1",
+            "annotations" => annotations
+          })
+
+        {:noreply, assign(socket, extensions: new_extensions)}
+      end
+
+      def render(assigns) do
+        ~H\"\"\"
+        <Fresco.scroll_strip
+          id="reader"
+          sources={@sources}
+          extensions={@extensions}
+          class="w-full h-lvh"
+        />
+
+        <Etcher.layer fresco_id="reader" />
+        \"\"\"
+      end
+
+  Etcher (or any peer library) reads its initial state via the strip
+  handle at mount — `handle.getExtension("etcher")` — and uses
+  `handle.getImages()` to discover per-image positions for overlay
+  placement. Mutating `@extensions` and re-assigning re-renders the
+  strip host with the new `data-extensions`; the handle's
+  `getExtension` returns the fresh data on the next call.
+
+  Symmetric with `<Fresco.canvas>`: the on-the-wire shape inside
+  `extensions.etcher` is identical, so a consumer that already
+  handles `etcher:annotations-changed` for canvas can reuse the
+  exact handler for strip — the only difference is that strip-mode
+  annotations carry an additional `image_idx` field in their
+  payload (which Etcher's strip-renderer will populate).
   """
 
   use Phoenix.Component
@@ -190,6 +243,44 @@ defmodule Fresco.ScrollStrip do
     """
   )
 
+  attr(:extensions, :map,
+    default: %{},
+    doc: """
+    Open map for peer-library state (annotation tools, ML overlays,
+    comment threads, …). Rendered as `data-extensions={Jason.encode!(...)}`
+    on the strip host so the JS engine can expose it via
+    `handle.getExtension(name)`. Mirrors `<Fresco.canvas>`'s `:extensions`
+    contract so consumers can persist the same shapes across both
+    components.
+
+    Default `%{}` — no `data-extensions` attribute emitted; existing
+    strip consumers see no change.
+
+    ## Attaching extensions
+
+    A peer library like Etcher reads its initial state via the strip
+    handle at mount, then renders per-image overlays as siblings of
+    each `<img>`. Use `handle.getImages()` to discover per-image
+    positions (top / height in scroll-container coordinates) — these
+    are read live from each `<img>`'s `offsetTop` / `offsetHeight`
+    and stay valid across memory-windowing evict/restore because the
+    component sets `aspect-ratio` per image.
+
+    ```js
+    window.Fresco.onReady("reader", function (handle) {
+      var etcher = handle.getExtension("etcher");
+      var pages = handle.getImages();
+      // pages[i] = { idx, url, naturalWidth, naturalHeight, top, height, element }
+    });
+    ```
+
+    Mutating the map server-side and re-assigning re-renders the
+    strip host with the new `data-extensions`; consumers reading
+    `handle.getExtension(name)` after the re-render see the fresh
+    data.
+    """
+  )
+
   attr(:rest, :global)
 
   @doc """
@@ -208,12 +299,14 @@ defmodule Fresco.ScrollStrip do
       |> Component.assign(:sources_json, Jason.encode!(assigns.sources))
       |> Component.assign(:gap_px_int, assigns.gap_px)
       |> Component.assign(:snap_to_image, assigns.snap_to_image)
+      |> Component.assign(:extensions_json, encode_extensions(assigns.extensions))
 
     ~H"""
     <div
       id={@id}
       phx-hook="FrescoScrollStrip"
       data-sources={@sources_json}
+      data-extensions={@extensions_json}
       data-window-before={Integer.to_string(@window_before)}
       data-window-after={Integer.to_string(@window_after)}
       data-gap-px={Integer.to_string(@gap_px_int)}
@@ -279,4 +372,10 @@ defmodule Fresco.ScrollStrip do
   defp scroll_snap_class(:off), do: nil
   defp scroll_snap_class(:mandatory), do: "fresco-strip--snap-mandatory"
   defp scroll_snap_class(:proximity), do: "fresco-strip--snap-proximity"
+
+  # JSON-encode :extensions for the data attr. Empty map collapses to
+  # nil so the attribute is omitted entirely — existing strip consumers
+  # see no new attribute on the host. Mirrors the canvas helper.
+  defp encode_extensions(map) when map == %{}, do: nil
+  defp encode_extensions(map) when is_map(map), do: Jason.encode!(map)
 end
