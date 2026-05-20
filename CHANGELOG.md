@@ -4,6 +4,52 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.4 — 2026-05-20
+
+Strip handle's `getImages()` now reports horizontal layout and prefers
+live natural dimensions, closing two extension-overlay edge cases
+flagged during Etcher 0.4 strip-renderer integration. Pure-additive
+on the field list; one behavior change is called out below.
+
+### Changed
+
+- **`handle.getImages()` on `<Fresco.scroll_strip>`** now includes
+  `left` and `width` alongside the existing `top` and `height`. All
+  four come from the corresponding `offsetLeft` / `offsetTop` /
+  `offsetWidth` / `offsetHeight` on each `<img>` element — i.e.,
+  positions are **padding-box-relative to the image's offset parent**
+  (which is the scroll container, since `<Fresco.scroll_strip>` sets
+  `position: relative` on the container at mount). Consumers that
+  style the container with horizontal padding, or center narrower
+  pages for desktop readability, can now size per-image overlays
+  correctly without re-querying the DOM themselves.
+- **Natural dimensions prefer the loaded bitmap.** When a strip image
+  has finished loading, `getImages()` returns `img.naturalWidth /
+  naturalHeight` in the `naturalWidth` / `naturalHeight` fields; the
+  consumer-passed `sources[i].width` / `height` is now a fallback for
+  unloaded images. Lets consumers seed `sources` with placeholder
+  ratios (e.g. server-side dim probes that haven't fired yet) without
+  permanently baking those ratios into extension geometry.
+
+  > **Behavior change.** `sources` is now treated as a *hint for
+  > placeholder sizing*, not a permanent override of the bitmap's
+  > intrinsic dimensions. Consumers that deliberately want
+  > `sources[i].width / height` to win over the loaded image
+  > (synthetic renders, hard scaling overrides) will see the new
+  > behavior. No code path in the official strip flow does this; the
+  > flag is here in case you're one of the consumers who does.
+
+### Why now
+
+Etcher 0.4 ships a strip-renderer that anchors per-image SVG overlays
+to each `<img>`'s offset rect and uses the natural dimensions as the
+overlay's `viewBox`. With the pre-0.5.4 surface, overlays sized to
+`100%` of the scroll container (so consumer-side horizontal padding
+left shapes stretched off the visible image) and `viewBox` got stuck
+at any placeholder ratio the consumer passed for unloaded images.
+Both fixes live cleanly on the Fresco side — extensions shouldn't have
+to walk the DOM to recover layout fresco already has.
+
 ## 0.5.3 — 2026-05-20
 
 `<Fresco.scroll_strip>` now exposes the same extensions contract as

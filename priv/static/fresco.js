@@ -2211,12 +2211,27 @@
         var idx = parseInt(img.dataset.imageIdx, 10);
         if (isNaN(idx)) idx = i;
         var src = sources[idx] || {};
+        // Once a bitmap has loaded the browser knows the true natural
+        // dimensions; prefer those over the consumer-passed `sources`
+        // hint. Consumers sometimes seed `sources` with placeholder
+        // ratios (server-side dim probes that haven't fired yet) and
+        // patch them once the real image arrives — extensions like
+        // Etcher need the post-load truth so per-image viewBoxes
+        // don't render against the stale ratio.
+        var natW = img.naturalWidth || src.width || 0;
+        var natH = img.naturalHeight || src.height || 0;
         out.push({
           idx: idx,
           url: src.url || img.getAttribute("src") || img.dataset.src || "",
-          naturalWidth: src.width || img.naturalWidth || 0,
-          naturalHeight: src.height || img.naturalHeight || 0,
+          naturalWidth: natW,
+          naturalHeight: natH,
+          // `top` / `height` come from `offsetTop` / `offsetHeight`.
+          // `left` / `width` round out the layout for extensions that
+          // attach sized overlays to consumer-styled strips (centered
+          // narrow pages, horizontal padding sliders, etc.).
           top: img.offsetTop,
+          left: img.offsetLeft,
+          width: img.offsetWidth,
           height: img.offsetHeight,
           element: img
         });

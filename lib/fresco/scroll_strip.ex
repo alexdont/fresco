@@ -261,18 +261,40 @@ defmodule Fresco.ScrollStrip do
     A peer library like Etcher reads its initial state via the strip
     handle at mount, then renders per-image overlays as siblings of
     each `<img>`. Use `handle.getImages()` to discover per-image
-    positions (top / height in scroll-container coordinates) — these
-    are read live from each `<img>`'s `offsetTop` / `offsetHeight`
-    and stay valid across memory-windowing evict/restore because the
-    component sets `aspect-ratio` per image.
+    layout — positions in scroll-container coordinates — these come
+    live from each `<img>`'s `offsetTop` / `offsetLeft` /
+    `offsetWidth` / `offsetHeight`, padding-box-relative to the
+    scroll container (which is the image's offset parent). The
+    `naturalWidth` / `naturalHeight` fields report the bitmap's true
+    intrinsic dimensions once loaded, falling back to the
+    consumer-passed `sources[i].width` / `height` for unloaded
+    images. All values stay valid across memory-windowing
+    evict/restore because the component sets `aspect-ratio` per
+    image.
 
     ```js
     window.Fresco.onReady("reader", function (handle) {
       var etcher = handle.getExtension("etcher");
       var pages = handle.getImages();
-      // pages[i] = { idx, url, naturalWidth, naturalHeight, top, height, element }
+      // pages[i] = {
+      //   idx, url, naturalWidth, naturalHeight,
+      //   top, left, width, height, element
+      // }
     });
     ```
+
+    Consumers that mutate `<img>` layout via CSS after mount (a
+    padding slider, an aspect-ratio correction class, container
+    resize via the layout shell) should dispatch a `resize` event on
+    the window after the mutation so peer libraries re-query:
+
+    ```js
+    window.dispatchEvent(new Event("resize"));
+    ```
+
+    `<Fresco.scroll_strip>` itself doesn't need the nudge — its own
+    geometry is implicit in the DOM — but extensions that snapshot
+    layout (Etcher's overlay sizing, ML overlay placement) do.
 
     Mutating the map server-side and re-assigning re-renders the
     strip host with the new `data-extensions`; consumers reading
