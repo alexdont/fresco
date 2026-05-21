@@ -2162,6 +2162,20 @@
       setPanLocked: engine.setPanLocked,
       setPanBounds: engine.setPanBounds,
       setHomeAction: engine.setHomeAction,
+      // 0.5.7+ rotation API. Without these re-exports, the canvas
+      // handle's `handle.setRotation(...)` proxy at the next layer
+      // up throws `TypeError: controller.setRotation is not a function`
+      // even though the engine has the method.
+      setRotation: engine.setRotation,
+      getRotation: engine.getRotation,
+      rotateBy: engine.rotateBy,
+      // 0.5.7+ programmatic nav-button equivalents. Same leak
+      // pattern — the engine has them, the handle proxies through,
+      // the controller layer in between had to re-export.
+      zoomIn: engine.zoomIn,
+      zoomOut: engine.zoomOut,
+      toggleFullscreen: engine.toggleFullscreen,
+      requestHome: engine.requestHome,
       setImageVisible: setImageVisible,
       getHiddenImageIds: getHiddenImageIds,
       setMemoryWindow: setMemoryWindow,

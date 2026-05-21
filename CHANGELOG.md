@@ -4,6 +4,28 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.8 — 2026-05-21
+
+### Fixed
+
+- **`handle.setRotation` / `getRotation` / `rotateBy` on
+  `<Fresco.canvas>`** no longer throw `TypeError: controller.X is
+  not a function`. 0.5.7 added the methods on the engine + wired
+  the public handle proxy, but `mountFrescoCanvas`'s controller
+  layer in between forgot to re-export them — so every call to
+  the public API tripped the missing controller method. The
+  engine-level rotation (and Fresco's built-in `Rotate 90°` nav
+  button, which calls the engine directly) was unaffected.
+
+  Same family of leak that 0.5.6 fixed for `setHomeAction` /
+  `setPanBounds` / `getTransform`; this release closes the
+  matching gap for the new 0.5.7 methods.
+
+- **`handle.zoomIn` / `zoomOut` / `toggleFullscreen` / `requestHome`
+  on `<Fresco.canvas>`** were silently broken by the same gap
+  (the engine had them, the handle proxied through, the
+  controller didn't re-export). Fixed in lockstep.
+
 ## 0.5.7 — 2026-05-21
 
 90°-snapped content rotation on `<Fresco.viewer>` and `<Fresco.canvas>`
