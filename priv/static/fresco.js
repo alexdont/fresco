@@ -120,8 +120,38 @@
     zoomIn:  '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607ZM10.5 7.5v6m3-3h-6"/></svg>',
     zoomOut: '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607ZM13.5 10.5h-6"/></svg>',
     reset:   '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>',
-    expand:  '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15"/></svg>'
+    expand:  '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15"/></svg>',
+    // Heroicons `arrow-path-rounded-square` — quarter-turn rotation
+    // affordance for the rotate nav button. Spins the content
+    // clockwise 90° per click; the icon's CW arrow matches.
+    rotate:  '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 12c0-1.232-.046-2.453-.138-3.662a4.006 4.006 0 0 0-3.7-3.7 48.678 48.678 0 0 0-7.324 0 4.006 4.006 0 0 0-3.7 3.7c-.017.22-.032.441-.046.662M19.5 12l3-3m-3 3-3-3m-12 3c0 1.232.046 2.453.138 3.662a4.006 4.006 0 0 0 3.7 3.7 48.656 48.656 0 0 0 7.324 0 4.006 4.006 0 0 0 3.7-3.7c.017-.22.032-.441.046-.662M4.5 12l3 3m-3-3-3 3"/></svg>'
   };
+
+  // Snap any rotation input to the nearest multiple of 90 and
+  // normalize to [0, 360). Used everywhere rotation is accepted as
+  // input; keeps the engine's `rot` state in a closed set of
+  // {0, 90, 180, 270} so the trig math is exact (no float drift)
+  // and the CSS transform string never carries a fractional angle.
+  function normalizeRotation(deg) {
+    if (typeof deg !== "number" || !isFinite(deg)) return 0;
+    var snapped = Math.round(deg / 90) * 90;
+    return ((snapped % 360) + 360) % 360;
+  }
+
+  // Exact cosine + sine for the four snapped rotations. Avoids
+  // running `Math.cos`/`Math.sin` per coordinate transform and
+  // guarantees the 90° / 270° cases produce a clean 0 (rather than
+  // ~6e-17, which compounds over many transforms).
+  function rotationCosSin(rot) {
+    switch (rot) {
+      case 0:   return { c:  1, sn:  0 };
+      case 90:  return { c:  0, sn:  1 };
+      case 180: return { c: -1, sn:  0 };
+      case 270: return { c:  0, sn: -1 };
+    }
+    var r = rot * Math.PI / 180;
+    return { c: Math.cos(r), sn: Math.sin(r) };
+  }
 
   // ===========================================================================
   // Styles — one stylesheet for viewer, canvas, and strip. The six --fresco-*
@@ -532,6 +562,9 @@
     if (enabled("fullscreen")) nav.appendChild(makeButton(ICONS.expand, "Toggle fullscreen", handlers.onFullscreen));
     if (enabled("zoom_in"))    nav.appendChild(makeButton(ICONS.zoomIn,  "Zoom in",  handlers.onZoomIn));
     if (enabled("zoom_out"))   nav.appendChild(makeButton(ICONS.zoomOut, "Zoom out", handlers.onZoomOut));
+    if (enabled("rotate") && handlers.onRotate) {
+      nav.appendChild(makeButton(ICONS.rotate, "Rotate 90°", handlers.onRotate));
+    }
     if (enabled("home"))       nav.appendChild(makeButton(ICONS.reset,   "Reset view", handlers.onFit));
     host.appendChild(nav);
     return nav;
@@ -557,14 +590,30 @@
     var ceil = parseFloat(el.dataset.zoomCeiling);
     if (!isNaN(ceil) && ceil > 0) opts.zoomCeiling = ceil;
     if (el.dataset.panLocked === "true") opts.panLocked = true;
-    if (el.dataset.gestures) {
+    // `data-gestures` mirrors the `data-nav-buttons` semantics
+    // — see comment above the nav-buttons branch for the "none"
+    // sentinel rationale.
+    if (el.dataset.gestures === "none") {
+      opts.gestures = [];
+    } else if (el.dataset.gestures) {
       var gs = el.dataset.gestures.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
       if (gs.length > 0) opts.gestures = gs;
     }
-    if (el.dataset.navButtons) {
+    // `data-nav-buttons` semantics:
+    //   - attribute absent (`undefined`) → default, all buttons enabled
+    //   - `"none"` → explicit hide-all (consumer passed an empty list)
+    //   - CSV of names → allowlist of just those buttons
+    // The "none" sentinel lets the Elixir side encode the
+    // "hide-everything" intent without overloading "empty string"
+    // (Phoenix sometimes drops empty data-attrs in render).
+    if (el.dataset.navButtons === "none") {
+      opts.navButtons = [];
+    } else if (el.dataset.navButtons) {
       var bs = el.dataset.navButtons.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
       if (bs.length > 0) opts.navButtons = bs;
     }
+    var initRot = parseFloat(el.dataset.initialRotation);
+    if (!isNaN(initRot)) opts.rotation = initRot;
     return opts;
   }
 
@@ -602,9 +651,18 @@
     var initialPanLocked   = !!opts.panLocked;
     var initialGestures    = opts.gestures;     // array or undefined
     var initialNavButtons  = opts.navButtons;   // array or undefined
+    var initialRotation    = opts.rotation;     // number or undefined
 
     // ── State ──────────────────────────────────────────────────────────────
     var tx = 0, ty = 0, s = 1;
+    // Rotation around the canvas/image origin, in degrees, snapped to
+    // {0, 90, 180, 270}. Composed with translate + scale as:
+    //   screen = translate(tx, ty) · rotate(rot) · scale(s) · image
+    // The CSS transform on the stage mirrors that order:
+    //   `translate3d(tx, ty, 0) rotate(rot deg)`.
+    // Image-pixel math (imageToScreen / screenToImage / fit / clamp)
+    // applies the rotation analytically — see `rotationCosSin`.
+    var rot = normalizeRotation(initialRotation || 0);
     var nw = 0, nh = 0;          // natural extent (image natural for viewer; canvas dims for canvas)
     var vw = 0, vh = 0;          // viewport
     var sFit = 1, sMin = 1, sMax = 8;
@@ -636,9 +694,32 @@
     // ── Math ───────────────────────────────────────────────────────────────
     function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
+    // Effective natural dims accounting for rotation. At 90° / 270°
+    // the content's screen-space width and height swap, so the
+    // fit-to-viewport scale must compare viewport against the
+    // swapped dims — otherwise a rotated portrait image would fit
+    // against its unrotated landscape and end up too small.
+    function effectiveNaturalSize() {
+      return (rot === 90 || rot === 270) ? { w: nh, h: nw } : { w: nw, h: nh };
+    }
+
+    // Bounding box of the canvas content in stage-local coords
+    // (post-rotation + scale, pre-translate), assuming canvas is
+    // (0, 0)–(nw, nh). For 90°-snapped rotations this is a swap +
+    // flip, no trig at runtime.
+    function rotatedContentBBox() {
+      switch (rot) {
+        case 0:   return { minX: 0,        minY: 0,        maxX: nw * s, maxY: nh * s };
+        case 90:  return { minX: -nh * s,  minY: 0,        maxX: 0,      maxY: nw * s };
+        case 180: return { minX: -nw * s,  minY: -nh * s,  maxX: 0,      maxY: 0 };
+        default:  return { minX: 0,        minY: -nw * s,  maxX: nh * s, maxY: 0 }; // 270
+      }
+    }
+
     function recomputeBounds() {
-      if (nw > 0 && nh > 0 && vw > 0 && vh > 0) {
-        sFit = Math.min(vw / nw, vh / nh);
+      var eff = effectiveNaturalSize();
+      if (eff.w > 0 && eff.h > 0 && vw > 0 && vh > 0) {
+        sFit = Math.min(vw / eff.w, vh / eff.h);
       } else {
         sFit = 1;
       }
@@ -663,37 +744,55 @@
       if (sMax < sMin) sMax = sMin;
     }
 
+    // Rotate + scale an unrotated canvas rect to its stage-local
+    // bounding box (post-rotation, pre-translate). Used by clampPan
+    // for both the canvas content rect (rotatedContentBBox) and any
+    // consumer-supplied custom pan bounds — keeps the math in one
+    // place regardless of which rect we're clamping against.
+    function rotatedRectBBox(rect) {
+      var cs = rotationCosSin(rot);
+      var x1 = rect.x, y1 = rect.y;
+      var x2 = rect.x + rect.width, y2 = rect.y + rect.height;
+      var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      var pts = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]];
+      for (var i = 0; i < 4; i++) {
+        var px = pts[i][0] * s * cs.c - pts[i][1] * s * cs.sn;
+        var py = pts[i][0] * s * cs.sn + pts[i][1] * s * cs.c;
+        if (px < minX) minX = px;
+        if (px > maxX) maxX = px;
+        if (py < minY) minY = py;
+        if (py > maxY) maxY = py;
+      }
+      return { minX: minX, minY: minY, maxX: maxX, maxY: maxY };
+    }
+
     function clampPan() {
       // setPanBounds takes precedence over infiniteCanvas. The consumer is
       // explicitly opting into clamping for a custom rect; the "no clamp"
       // contract of infinite_canvas only applies when no rect is set.
+      // Both branches use the same rotated-bbox math so a rotated
+      // viewer still clamps to "content covers the viewport" instead
+      // of clamping against the unrotated rect (which would leak the
+      // background past the rotated content's edges).
+      var bbox;
       if (customPanBounds) {
-        var px = customPanBounds.x, py = customPanBounds.y;
-        var pw = customPanBounds.width * s, ph = customPanBounds.height * s;
-        // Convert custom-rect bounds to screen-space at current scale.
-        // Image-pixel custom coords → screen coords use the same formula
-        // as imageToScreen (without the page-rect offset, since we're
-        // computing tx/ty directly in viewport-relative space).
-        // Visible custom-rect in viewport coords: starts at (px*s + tx, py*s + ty),
-        // extends to (px*s + tx + pw, py*s + ty + ph).
-        // Want it to cover the viewport — like the default clampPan but
-        // against the custom rect instead of (0, 0, nw, nh).
-        if (pw >= vw) {
-          tx = clamp(tx, vw - pw - px * s, 0 - px * s);
-        } else {
-          tx = (vw - pw) / 2 - px * s;
-        }
-        if (ph >= vh) {
-          ty = clamp(ty, vh - ph - py * s, 0 - py * s);
-        } else {
-          ty = (vh - ph) / 2 - py * s;
-        }
-        return;
+        bbox = rotatedRectBBox(customPanBounds);
+      } else {
+        if (infiniteCanvas) return;
+        bbox = rotatedContentBBox();
       }
-      if (infiniteCanvas) return;
-      var w = nw * s, h = nh * s;
-      if (w >= vw) { tx = clamp(tx, vw - w, 0); } else { tx = (vw - w) / 2; }
-      if (h >= vh) { ty = clamp(ty, vh - h, 0); } else { ty = (vh - h) / 2; }
+      var bw = bbox.maxX - bbox.minX;
+      var bh = bbox.maxY - bbox.minY;
+      if (bw >= vw) {
+        tx = clamp(tx, vw - bbox.maxX, -bbox.minX);
+      } else {
+        tx = (vw - bw) / 2 - bbox.minX;
+      }
+      if (bh >= vh) {
+        ty = clamp(ty, vh - bbox.maxY, -bbox.minY);
+      } else {
+        ty = (vh - bh) / 2 - bbox.minY;
+      }
     }
 
     // Re-read natural size + viewport from the DOM, recompute bounds, re-clamp.
@@ -715,8 +814,15 @@
     function fit() {
       refresh();
       s = sFit;
-      tx = (vw - nw * s) / 2;
-      ty = (vh - nh * s) / 2;
+      // Center the rotated bbox in the viewport. For rot=0 this
+      // reduces to the previous formula; for 90 / 180 / 270 the
+      // bbox extents are different and we'd otherwise frame the
+      // wrong rect.
+      var bbox = rotatedContentBBox();
+      var bw = bbox.maxX - bbox.minX;
+      var bh = bbox.maxY - bbox.minY;
+      tx = (vw - bw) / 2 - bbox.minX;
+      ty = (vh - bh) / 2 - bbox.minY;
       clampPan();
       requestFrame();
     }
@@ -741,13 +847,18 @@
       requestFrame();
     }
 
-    function setTransform(nextTx, nextTy, nextS) {
+    function setTransform(nextTx, nextTy, nextS, nextRot) {
       // Any direct setTransform cancels an in-flight animation —
       // it's an explicit "go here now" command, not a "glide here"
       // request. Use animateTo() if you want the animated variant.
       cancelAnimation();
       tx = nextTx; ty = nextTy;
       s = clamp(nextS, sMin, sMax);
+      // Optional 4th arg — keep 3-arg callers (pre-0.5.7) on their
+      // current rotation. setRotation() is the dedicated API for
+      // rotation-only changes; this lets composite ops set all four
+      // values atomically without re-running fit math.
+      if (typeof nextRot === "number") rot = normalizeRotation(nextRot);
       clampPan();
       requestFrame();
     }
@@ -816,9 +927,15 @@
 
     function apply() {
       applyChildren(s);
-      stage.style.transform = "translate3d(" + tx + "px, " + ty + "px, 0)";
-      bus._emit("animation", { tx: tx, ty: ty, scale: s });
-      bus._emit("update-viewport", { tx: tx, ty: ty, scale: s });
+      // `translate3d(tx, ty, 0) rotate(rot deg)` — CSS reads right-
+      // to-left, so rotate happens first (around the stage's own
+      // 0,0 origin) then translate moves the rotated content into
+      // place. Matches the image-pixel math in `rotatedContentBBox`
+      // / `imageToScreen`.
+      stage.style.transform =
+        "translate3d(" + tx + "px, " + ty + "px, 0) rotate(" + rot + "deg)";
+      bus._emit("animation", { tx: tx, ty: ty, scale: s, rotation: rot });
+      bus._emit("update-viewport", { tx: tx, ty: ty, scale: s, rotation: rot });
     }
 
     function requestFrame() {
@@ -1032,6 +1149,22 @@
       }
     }
 
+    // Convenience zoom helpers that mirror the nav buttons' behavior
+    // exactly — same step factor (1.4×), same anchor (viewport
+    // center). Consumers wiring custom toolbars / keyboard shortcuts
+    // / accessibility affordances call these instead of replicating
+    // the math against `zoomAt` and `viewportRect`.
+    function zoomIn(factor) {
+      var rect = viewportRect();
+      vw = rect.width; vh = rect.height;
+      zoomAt(vw / 2, vh / 2, factor || 1.4);
+    }
+    function zoomOut(factor) {
+      var rect = viewportRect();
+      vw = rect.width; vh = rect.height;
+      zoomAt(vw / 2, vh / 2, 1 / (factor || 1.4));
+    }
+
     // ── Listeners + nav + resize ───────────────────────────────────────────
     el.addEventListener("pointerdown", onPointerDown);
     el.addEventListener("pointermove", onPointerMove);
@@ -1054,6 +1187,7 @@
         vw = rect.width; vh = rect.height;
         zoomAt(vw / 2, vh / 2, 1 / 1.4);
       },
+      onRotate: function() { rotateBy(90); },
       onFullscreen: toggleFullscreen
     }, {
       navButtonEnabled: function(name) { return navButtonEnabled(name); }
@@ -1148,6 +1282,35 @@
       customHome = (typeof fn === "function") ? fn : null;
     }
 
+    // Snap any input to {0, 90, 180, 270}. Re-homes so the new
+    // rotation lands on a centered, on-screen view (otherwise a 90°
+    // rotation at the previous tx/ty would push the content off the
+    // side, since the content's rotated bbox is shaped differently).
+    // Fires `rotate` once on actual changes — no-op when the snapped
+    // input equals the current rotation.
+    //
+    // The re-home routes through `requestHome()` instead of bare
+    // `fit()` so any `customHome` set via `setHomeAction` runs too —
+    // a paged manga reader that fits the current page on reset
+    // should re-fit the current page after rotating, not the whole
+    // multi-image canvas. Consumers without a customHome get the
+    // engine's default fit (`fit()`).
+    function setRotation(deg) {
+      var next = normalizeRotation(deg);
+      if (next === rot) return;
+      var previous = rot;
+      rot = next;
+      requestHome();
+      bus._emit("rotate", { rotation: rot, previous: previous });
+    }
+
+    function getRotation() { return rot; }
+
+    // Convenience for "rotate by N degrees" toggle buttons. The
+    // delta is added to the current rotation, then snapped + normalized
+    // by `setRotation`.
+    function rotateBy(delta) { setRotation(rot + (delta || 0)); }
+
     function requestHome() {
       if (customHome) {
         try { customHome(); } catch (e) {
@@ -1186,7 +1349,9 @@
       setTransform: setTransform,
       refresh: refresh,
       requestFrame: requestFrame,
-      getTransform: function() { return { tx: tx, ty: ty, s: s }; },
+      getTransform: function() {
+        return { tx: tx, ty: ty, s: s, rotation: rot };
+      },
       getViewportSize: function() { return { vw: vw, vh: vh }; },
       getNaturalSize: function() { return { w: nw, h: nh }; },
       isInfiniteCanvas: function() { return infiniteCanvas; },
@@ -1197,6 +1362,18 @@
       setPanLocked: setPanLocked,
       setPanBounds: setPanBounds,
       setHomeAction: setHomeAction,
+      setRotation: setRotation,
+      getRotation: getRotation,
+      rotateBy: rotateBy,
+      // Programmatic equivalents of the built-in nav buttons so a
+      // consumer hiding the chrome can still wire their own buttons,
+      // keyboard shortcuts, or accessibility affordances to the same
+      // behavior. Identical step factors + anchors as the built-in
+      // buttons (1.4× / 1/1.4× zoom around viewport center;
+      // requestHome flows through any active `customHome`).
+      zoomIn: zoomIn,
+      zoomOut: zoomOut,
+      toggleFullscreen: toggleFullscreen,
       requestHome: requestHome,
       setEnabledGestures: setEnabledGestures,
       setEnabledNavButtons: setEnabledNavButtons,
@@ -1243,6 +1420,7 @@
       panLocked: attrOpts.panLocked,
       gestures: attrOpts.gestures,
       navButtons: attrOpts.navButtons,
+      rotation: attrOpts.rotation,
       getNaturalSize: function() {
         return {
           w: img.naturalWidth || img.width || 0,
@@ -1402,21 +1580,35 @@
     var bus = controller.bus;
     var el = controller.el;
 
+    // image-pixel → screen-pixel under composite transform
+    //   screen = rect.{left,top} + translate(tx, ty) · rotate(rot) · scale(s) · image
+    // For 90°-snapped rotations the cos/sin pair is exact (see
+    // `rotationCosSin`) so the formula reduces to swaps + negations
+    // — no trig at the hot path.
     function imageToScreen(pt) {
       var t = controller.getTransform();
       var rect = el.getBoundingClientRect();
+      var cs = rotationCosSin(t.rotation || 0);
+      var px = (pt.x || 0) * t.s;
+      var py = (pt.y || 0) * t.s;
       return {
-        x: (pt.x || 0) * t.s + t.tx + rect.left,
-        y: (pt.y || 0) * t.s + t.ty + rect.top
+        x: rect.left + t.tx + px * cs.c - py * cs.sn,
+        y: rect.top  + t.ty + px * cs.sn + py * cs.c
       };
     }
 
+    // Inverse of imageToScreen — subtract translate, apply inverse
+    // rotation (transpose of the rotation matrix), then divide by
+    // scale to get image-pixel coords.
     function screenToImage(pt) {
       var t = controller.getTransform();
       var rect = el.getBoundingClientRect();
+      var cs = rotationCosSin(t.rotation || 0);
+      var dx = (pt.x || 0) - rect.left - t.tx;
+      var dy = (pt.y || 0) - rect.top  - t.ty;
       return {
-        x: ((pt.x || 0) - rect.left - t.tx) / t.s,
-        y: ((pt.y || 0) - rect.top - t.ty) / t.s
+        x: ( dx * cs.c + dy * cs.sn) / t.s,
+        y: (-dx * cs.sn + dy * cs.c) / t.s
       };
     }
 
@@ -1434,9 +1626,35 @@
     function fitBounds(rect, opts) {
       if (!rect || rect.width <= 0 || rect.height <= 0) return;
       var v = controller.getViewportSize();
-      var newS = Math.min(v.vw / rect.width, v.vh / rect.height);
-      var newTx = (v.vw - newS * rect.width) / 2 - newS * rect.x;
-      var newTy = (v.vh - newS * rect.height) / 2 - newS * rect.y;
+      var t = controller.getTransform();
+      var rot = t.rotation || 0;
+      // The rect is in unrotated canvas-px (the consumer's natural
+      // frame of reference). After rotation, its screen-space bbox
+      // has different dims — for 90° / 270° the width and height
+      // swap. Compute newS against the rotated bbox so the rotated
+      // content actually fits the viewport.
+      var fitW = (rot === 90 || rot === 270) ? rect.height : rect.width;
+      var fitH = (rot === 90 || rot === 270) ? rect.width  : rect.height;
+      var newS = Math.min(v.vw / fitW, v.vh / fitH);
+      // Compute the rotated + scaled bbox of `rect` in stage-local
+      // coords (pre-translate). The same math as `rotatedRectBBox`
+      // but inlined since the engine's helper isn't exposed.
+      var cs = rotationCosSin(rot);
+      var x1 = rect.x, y1 = rect.y;
+      var x2 = rect.x + rect.width, y2 = rect.y + rect.height;
+      var pts = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]];
+      var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (var i = 0; i < 4; i++) {
+        var px = pts[i][0] * newS * cs.c - pts[i][1] * newS * cs.sn;
+        var py = pts[i][0] * newS * cs.sn + pts[i][1] * newS * cs.c;
+        if (px < minX) minX = px;
+        if (px > maxX) maxX = px;
+        if (py < minY) minY = py;
+        if (py > maxY) maxY = py;
+      }
+      // Center the rotated bbox in the viewport.
+      var newTx = (v.vw - (maxX - minX)) / 2 - minX;
+      var newTy = (v.vh - (maxY - minY)) / 2 - minY;
       if (opts && opts.animate) {
         controller.animateTo(newTx, newTy, newS, {
           duration: opts.duration,
@@ -1582,6 +1800,7 @@
       panLocked: canvasAttrOpts.panLocked,
       gestures: canvasAttrOpts.gestures,
       navButtons: canvasAttrOpts.navButtons,
+      rotation: canvasAttrOpts.rotation,
       getNaturalSize: function() { return { w: canvasW, h: canvasH }; },
       applyChildren: function(s) {
         for (var i = 0; i < imgs.length; i++) {
@@ -1963,21 +2182,35 @@
     var bus = controller.bus;
     var el = controller.el;
 
+    // image-pixel → screen-pixel under composite transform
+    //   screen = rect.{left,top} + translate(tx, ty) · rotate(rot) · scale(s) · image
+    // For 90°-snapped rotations the cos/sin pair is exact (see
+    // `rotationCosSin`) so the formula reduces to swaps + negations
+    // — no trig at the hot path.
     function imageToScreen(pt) {
       var t = controller.getTransform();
       var rect = el.getBoundingClientRect();
+      var cs = rotationCosSin(t.rotation || 0);
+      var px = (pt.x || 0) * t.s;
+      var py = (pt.y || 0) * t.s;
       return {
-        x: (pt.x || 0) * t.s + t.tx + rect.left,
-        y: (pt.y || 0) * t.s + t.ty + rect.top
+        x: rect.left + t.tx + px * cs.c - py * cs.sn,
+        y: rect.top  + t.ty + px * cs.sn + py * cs.c
       };
     }
 
+    // Inverse of imageToScreen — subtract translate, apply inverse
+    // rotation (transpose of the rotation matrix), then divide by
+    // scale to get image-pixel coords.
     function screenToImage(pt) {
       var t = controller.getTransform();
       var rect = el.getBoundingClientRect();
+      var cs = rotationCosSin(t.rotation || 0);
+      var dx = (pt.x || 0) - rect.left - t.tx;
+      var dy = (pt.y || 0) - rect.top  - t.ty;
       return {
-        x: ((pt.x || 0) - rect.left - t.tx) / t.s,
-        y: ((pt.y || 0) - rect.top - t.ty) / t.s
+        x: ( dx * cs.c + dy * cs.sn) / t.s,
+        y: (-dx * cs.sn + dy * cs.c) / t.s
       };
     }
 
@@ -1995,9 +2228,35 @@
     function fitBounds(rect, opts) {
       if (!rect || rect.width <= 0 || rect.height <= 0) return;
       var v = controller.getViewportSize();
-      var newS = Math.min(v.vw / rect.width, v.vh / rect.height);
-      var newTx = (v.vw - newS * rect.width) / 2 - newS * rect.x;
-      var newTy = (v.vh - newS * rect.height) / 2 - newS * rect.y;
+      var t = controller.getTransform();
+      var rot = t.rotation || 0;
+      // The rect is in unrotated canvas-px (the consumer's natural
+      // frame of reference). After rotation, its screen-space bbox
+      // has different dims — for 90° / 270° the width and height
+      // swap. Compute newS against the rotated bbox so the rotated
+      // content actually fits the viewport.
+      var fitW = (rot === 90 || rot === 270) ? rect.height : rect.width;
+      var fitH = (rot === 90 || rot === 270) ? rect.width  : rect.height;
+      var newS = Math.min(v.vw / fitW, v.vh / fitH);
+      // Compute the rotated + scaled bbox of `rect` in stage-local
+      // coords (pre-translate). The same math as `rotatedRectBBox`
+      // but inlined since the engine's helper isn't exposed.
+      var cs = rotationCosSin(rot);
+      var x1 = rect.x, y1 = rect.y;
+      var x2 = rect.x + rect.width, y2 = rect.y + rect.height;
+      var pts = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]];
+      var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (var i = 0; i < 4; i++) {
+        var px = pts[i][0] * newS * cs.c - pts[i][1] * newS * cs.sn;
+        var py = pts[i][0] * newS * cs.sn + pts[i][1] * newS * cs.c;
+        if (px < minX) minX = px;
+        if (px > maxX) maxX = px;
+        if (py < minY) minY = py;
+        if (py > maxY) maxY = py;
+      }
+      // Center the rotated bbox in the viewport.
+      var newTx = (v.vw - (maxX - minX)) / 2 - minX;
+      var newTy = (v.vh - (maxY - minY)) / 2 - minY;
       if (opts && opts.animate) {
         controller.animateTo(newTx, newTy, newS, {
           duration: opts.duration,
@@ -2052,8 +2311,28 @@
       setHomeAction:  function(fn) { controller.setHomeAction(fn); },
       // Live transform getter for consumers building layered
       // overlays (annotation surfaces, diagnostic HUDs) that need
-      // to mirror the canvas's `{tx, ty, s}` between frames.
+      // to mirror the canvas's `{tx, ty, s, rotation}` between
+      // frames. The `rotation` field is in degrees, snapped to one
+      // of {0, 90, 180, 270}.
       getTransform:   function() { return controller.getTransform(); },
+      // 90°-snapped content rotation (0.5.7+). `setRotation(deg)`
+      // re-fits + emits a `rotate` event when the snapped value
+      // actually changes; `getRotation()` returns the current angle;
+      // `rotateBy(delta)` is sugar for `setRotation(getRotation()+delta)`
+      // — wire it to a toggle button. The host element + nav
+      // overlay stay un-rotated; only the stage (and everything
+      // inside it, including extension SVG overlays) rotates.
+      setRotation:    function(deg) { controller.setRotation(deg); },
+      getRotation:    function() { return controller.getRotation(); },
+      rotateBy:       function(delta) { controller.rotateBy(delta); },
+      // Programmatic equivalents of the built-in nav buttons —
+      // identical step factors + anchors. Consumers hiding the
+      // chrome (`:nav_buttons={[]}`) but wanting the same actions
+      // wired to their own buttons / shortcuts call these.
+      zoomIn:           function(f) { controller.zoomIn(f); },
+      zoomOut:          function(f) { controller.zoomOut(f); },
+      toggleFullscreen: function()  { controller.toggleFullscreen(); },
+      requestHome:      function()  { controller.requestHome(); },
       // 0.5.2+ view-tracking — emits "view-focus" / "view-blur" on
       // the bus when the dominant image changes. Default off; enable
       // explicitly to start.
@@ -2291,6 +2570,27 @@
       getScrollState: getScrollState,
       getExtension: getExtension,
       getImages: getImages,
+
+      // 0.5.7+ rotation API parity-shim. Strip is vertical-scroll-only
+      // by design — rotating it would break the reader UX — so these
+      // are documented no-ops that warn loudly enough to catch a
+      // wrong-handle bug in development without crashing the page.
+      setRotation: function() {
+        if (typeof console !== "undefined" && console.warn) {
+          console.warn(
+            "[Fresco] setRotation is not supported on <Fresco.scroll_strip>; " +
+            "strip mode is vertical-only. Use <Fresco.canvas> / <Fresco.viewer> for rotated content."
+          );
+        }
+      },
+      getRotation: function() { return 0; },
+      rotateBy: function() {
+        if (typeof console !== "undefined" && console.warn) {
+          console.warn(
+            "[Fresco] rotateBy is not supported on <Fresco.scroll_strip>."
+          );
+        }
+      },
 
       on: bus.on,
       _emit: bus._emit,

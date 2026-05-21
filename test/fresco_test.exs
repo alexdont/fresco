@@ -110,6 +110,27 @@ defmodule FrescoTest do
       html = render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg")
       refute html =~ "data-gestures"
       refute html =~ "data-nav-buttons"
+      refute html =~ "data-initial-rotation"
+    end
+
+    test "initial_rotation defaults to 0 (omitted from DOM)" do
+      html = render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg", initial_rotation: 0)
+      refute html =~ "data-initial-rotation"
+    end
+
+    test "initial_rotation renders the data attribute when non-zero" do
+      html = render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg", initial_rotation: 90)
+      assert html =~ ~s(data-initial-rotation="90")
+    end
+
+    test "empty nav_buttons list renders the `none` sentinel (hide every button)" do
+      html = render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg", nav_buttons: [])
+      assert html =~ ~s(data-nav-buttons="none")
+    end
+
+    test "empty gestures list renders the `none` sentinel (explicit hide-all)" do
+      html = render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg", gestures: [])
+      assert html =~ ~s(data-gestures="none")
     end
 
     test "gestures renders CSV of atom names" do
@@ -322,6 +343,22 @@ defmodule FrescoTest do
       refute html =~ "data-memory-window"
       refute html =~ "data-gestures"
       refute html =~ "data-nav-buttons"
+      refute html =~ "data-initial-rotation"
+    end
+
+    test "initial_rotation defaults to 0 and is omitted from the DOM" do
+      canvas = build_canvas()
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas, initial_rotation: 0)
+      refute html =~ "data-initial-rotation"
+    end
+
+    test "initial_rotation renders the data attribute when non-zero" do
+      canvas = build_canvas()
+
+      html =
+        render_component(&Fresco.canvas/1, id: "b", canvas: canvas, initial_rotation: 90)
+
+      assert html =~ ~s(data-initial-rotation="90")
     end
 
     test "initial_fit_image_id renders the data attribute" do
@@ -387,10 +424,16 @@ defmodule FrescoTest do
       assert html =~ ~s(data-nav-buttons="zoom_in,zoom_out,home")
     end
 
-    test "empty gestures list (e.g. []) is treated as 'no allowlist' and omits the attr" do
+    test "empty gestures list renders the `none` sentinel (explicit hide-all)" do
       canvas = build_canvas()
       html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas, gestures: [])
-      refute html =~ "data-gestures"
+      assert html =~ ~s(data-gestures="none")
+    end
+
+    test "empty nav_buttons list renders the `none` sentinel (hide every button)" do
+      canvas = build_canvas()
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas, nav_buttons: [])
+      assert html =~ ~s(data-nav-buttons="none")
     end
 
     test "view-tracking attrs default to omitted" do

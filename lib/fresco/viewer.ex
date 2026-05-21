@@ -148,8 +148,30 @@ defmodule Fresco.Viewer do
     default: nil,
     doc: """
     Allowlist of enabled built-in nav buttons. Atom list:
-    `[:home, :zoom_in, :zoom_out, :fullscreen]`. Default `nil` enables
-    all. Omitted entries are hidden.
+    `[:home, :zoom_in, :zoom_out, :rotate, :fullscreen]`.
+
+    - `nil` (default) — every button enabled.
+    - `[]` — every button **hidden**. Useful for consumers building
+      their own chrome; wire your buttons to
+      `handle.zoomIn()` / `handle.zoomOut()` / `handle.rotateBy(90)` /
+      `handle.toggleFullscreen()` / `handle.requestHome()` to get
+      identical behavior to the built-ins.
+    - A subset list — only those buttons render.
+    """
+  )
+
+  attr(:initial_rotation, :integer,
+    default: 0,
+    doc: """
+    Initial rotation in degrees, snapped to one of `{0, 90, 180, 270}`
+    at mount time. Pre-0.5.7 behavior (no rotation) corresponds to
+    `0`. Consumers persisting a per-image rotation choice server-
+    side pass it here so the first paint already shows the rotated
+    content — no flash of unrotated → rotated.
+
+    Runtime control via `handle.setRotation(deg)` /
+    `handle.rotateBy(delta)`; the built-in `:rotate` nav button
+    cycles `+90°` per click.
     """
   )
 
@@ -180,6 +202,7 @@ defmodule Fresco.Viewer do
       data-pan-locked={@pan_locked && "true"}
       data-gestures={@gestures_csv}
       data-nav-buttons={@nav_buttons_csv}
+      data-initial-rotation={@initial_rotation != 0 && to_string(@initial_rotation)}
       class={[
         "fresco-viewer",
         @class,
@@ -196,7 +219,11 @@ defmodule Fresco.Viewer do
   end
 
   defp atoms_to_csv(nil), do: nil
-  defp atoms_to_csv([]), do: nil
+  # Explicit empty list → "none" sentinel. Lets consumers pass
+  # `nav_buttons: []` (or `gestures: []`) to hide the whole group;
+  # the JS side reads `data-*="none"` and seeds an empty allowlist
+  # (vs the omitted-attr case which defaults to "all enabled").
+  defp atoms_to_csv([]), do: "none"
 
   defp atoms_to_csv(list) when is_list(list) do
     list

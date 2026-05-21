@@ -4,6 +4,85 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.7 — 2026-05-21
+
+90°-snapped content rotation on `<Fresco.viewer>` and `<Fresco.canvas>`
+as a first-class transform parameter, plus programmatic equivalents of
+every nav button so consumers can hide the built-in chrome and wire
+their own UI to the same actions. Backwards-compatible — the default
+rotation is `0`, `nil` `:nav_buttons` still enables every button, and
+every existing consumer keeps its current behavior.
+
+### Added
+
+- **`handle.setRotation(deg)` / `getRotation()` / `rotateBy(delta)`**
+  on viewer + canvas handles. Input is snapped to the nearest 90°
+  multiple and normalized to `[0, 360)`; `setRotation` is a no-op
+  when the snapped value matches the current rotation. `rotateBy`
+  is sugar for `setRotation(getRotation() + delta)`. Every rotation
+  change auto-re-homes through `requestHome()` — so any consumer
+  `setHomeAction` (a paged reader's "fit current page", for
+  example) fires after the rotation lands. Without this, a 90°
+  rotation at the previous `tx, ty` would push the content off
+  the side; with it, the rotated content always lands centered
+  on the consumer-chosen target.
+- **`rotate` event** on the handle bus. Payload
+  `{rotation, previous}` — fires once on every actual rotation
+  change. Extensions that cache screen-px values (overlay HUDs,
+  layered SVGs) subscribe to invalidate.
+- **`:initial_rotation` component attr** on `<Fresco.viewer>` and
+  `<Fresco.canvas>` (default `0`). Read at mount, snapped, applied
+  before the first paint so the host can persist a per-image
+  rotation server-side without a flash of unrotated → rotated.
+  Mirrors as `data-initial-rotation` on the host element.
+- **`Rotate 90°` nav button** in the built-in nav column. Cycles
+  `0 → 90 → 180 → 270 → 0` per click. Gated by the existing
+  `:nav_buttons` allowlist via the `:rotate` atom (default `nil`
+  enables it).
+- **`rotation` field** on `handle.getTransform()`'s return
+  (`{tx, ty, s, rotation}`). Same composite-transform consumers
+  build for layered overlays now have the angle available without
+  a separate getter call.
+- **Programmatic nav-action methods** on both viewer and canvas
+  handles: `zoomIn(factor?)`, `zoomOut(factor?)`,
+  `toggleFullscreen()`, `requestHome()`. Identical step factors
+  + anchors as the built-in nav buttons (1.4× / 1/1.4× around the
+  viewport center; `requestHome` flows through any active
+  `customHome` set via `setHomeAction`). Lets consumers hide the
+  built-in chrome and wire their own buttons / keyboard shortcuts /
+  accessibility affordances to the exact same behavior.
+- **Empty `:nav_buttons` / `:gestures` list now means "hide
+  everything"** instead of falling back to the default of "all
+  enabled." Pass `nav_buttons: []` on `<Fresco.viewer>` /
+  `<Fresco.canvas>` to render no built-in chrome at all (the
+  Elixir side emits `data-nav-buttons="none"` as a sentinel; the
+  JS side seeds an empty allowlist). The `nil` default is
+  unchanged. Same semantics now apply to `:gestures`.
+
+### Changed
+
+- **`imageToScreen` / `screenToImage`** on viewer + canvas handles
+  now apply the rotation analytically. For 90°-snapped angles the
+  cos/sin pair is exact (no float drift) and the formula reduces
+  to swaps + negations. Extensions (Etcher annotations, ML
+  overlays, comment threads) that route coordinate math through
+  these helpers pick up rotation support without any consumer-side
+  fix-ups — image-pixel coords stay invariant.
+- **`fit()` / `clampPan()`** account for the rotated content's
+  screen-space bounding box. A 90° rotation on a landscape image
+  now fits the swapped (portrait) dims into the viewport instead
+  of the original landscape dims.
+- **`setTransform(tx, ty, s, rot?)`** takes an optional 4th
+  argument for rotation. Three-arg callers see no behavior change
+  — their rotation is preserved.
+
+### Not supported
+
+- **`<Fresco.scroll_strip>`** is vertical-only by design;
+  `setRotation` / `rotateBy` on a strip handle are no-ops that
+  warn loudly enough to catch wrong-handle bugs in development.
+  `getRotation()` returns `0`.
+
 ## 0.5.6 — 2026-05-21
 
 ### Fixed

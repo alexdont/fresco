@@ -616,8 +616,33 @@ defmodule Fresco.Canvas do
     default: nil,
     doc: """
     Allowlist of enabled built-in nav buttons. Atom list:
-    `[:home, :zoom_in, :zoom_out, :fullscreen]`. Default `nil` enables
-    all. Omitted entries are hidden.
+    `[:home, :zoom_in, :zoom_out, :rotate, :fullscreen]`.
+
+    - `nil` (default) — every button enabled.
+    - `[]` — every button **hidden**. Useful for consumers building
+      their own chrome; wire your buttons to
+      `handle.zoomIn()` / `handle.zoomOut()` / `handle.rotateBy(90)` /
+      `handle.toggleFullscreen()` / `handle.requestHome()` to get
+      identical behavior to the built-ins.
+    - A subset list — only those buttons render.
+    """
+  )
+
+  attr(:initial_rotation, :integer,
+    default: 0,
+    doc: """
+    Initial rotation in degrees, snapped to one of `{0, 90, 180, 270}`
+    at mount time. Pre-0.5.7 behavior (no rotation) corresponds to
+    `0`. Consumers persisting a per-canvas rotation choice (a
+    rotated single panel inside a paged reader, for example) pass
+    it here so the first paint already shows the rotated content
+    — no flash of unrotated → rotated.
+
+    Runtime control via `handle.setRotation(deg)` /
+    `handle.rotateBy(delta)`; the built-in `:rotate` nav button
+    cycles `+90°` per click. Only the stage rotates — host
+    element, nav overlay, and any consumer overlays outside the
+    stage stay unrotated.
     """
   )
 
@@ -711,6 +736,7 @@ defmodule Fresco.Canvas do
       data-memory-window={@memory_window && Integer.to_string(@memory_window)}
       data-gestures={@gestures_csv}
       data-nav-buttons={@nav_buttons_csv}
+      data-initial-rotation={@initial_rotation != 0 && to_string(@initial_rotation)}
       data-view-tracking={@view_tracking && "true"}
       data-view-settle-ms={@view_tracking && Integer.to_string(@view_settle_ms)}
       data-view-threshold={@view_tracking && to_string(@view_threshold)}
@@ -754,7 +780,11 @@ defmodule Fresco.Canvas do
   # engine can split (`"pan,pinch"`). Nil passes through so the attr is
   # omitted entirely, meaning "no allowlist; everything enabled."
   defp atoms_to_csv(nil), do: nil
-  defp atoms_to_csv([]), do: nil
+  # Explicit empty list → "none" sentinel. Lets consumers pass
+  # `nav_buttons: []` (or `gestures: []`) to hide the whole group;
+  # the JS side reads `data-*="none"` and seeds an empty allowlist
+  # (vs the omitted-attr case which defaults to "all enabled").
+  defp atoms_to_csv([]), do: "none"
 
   defp atoms_to_csv(list) when is_list(list) do
     list
