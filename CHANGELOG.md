@@ -4,6 +4,38 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.5 — 2026-05-21
+
+Canvas multi-image visibility now broadcasts a signal extensions
+can subscribe to. Pure-additive; existing single-image canvas
+consumers see no change.
+
+### Added
+
+- **`image-visibility-change` event** on the canvas handle bus.
+  Fires from `setImageVisible(id, visible)` whenever the hidden
+  set actually changes (no-op re-toggles are silent). Payload:
+  `{imageId, visible}`. Lets extensions pinned to a specific
+  image — Etcher annotations, ML overlays, comment threads —
+  hide or restore their DOM in lockstep with the host's
+  `display: none` on that image's `<img>`.
+- **`handle.getHiddenImageIds()`** returns a snapshot of the
+  currently-hidden image ids as a plain array. Late-mounting
+  extensions seed their initial state from this — the event is
+  fire-and-forget, not replayed, so an extension that mounts
+  after the host already toggled images off needs a pull API.
+- **`handle.setImageVisible(id, visible)`** is now on the canvas
+  handle's public surface (was previously available on the
+  underlying controller only).
+
+### Why now
+
+Etcher 0.4.7 ships per-image shape tagging on multi-image canvases
+(paged manga / spread readers / lookbooks) so it can hide shapes
+whose host image is currently `display: none`. The host already
+calls `setImageVisible`; this release adds the signal Etcher needs
+to mirror that state.
+
 ## 0.5.4 — 2026-05-20
 
 Strip handle's `getImages()` now reports horizontal layout and prefers

@@ -1750,10 +1750,29 @@
 
     // Toggle individual image visibility without removing it from the
     // layout (so pan-bounds, annotations, fit math stay anchored).
+    // Emits `image-visibility-change` on the bus so extensions
+    // (Etcher, ML overlays, comment threads) that pin DOM siblings
+    // to a specific image can hide them in lockstep.
     function setImageVisible(id, visible) {
+      var was = hiddenImageIds.has(id);
       if (visible) hiddenImageIds.delete(id);
       else hiddenImageIds.add(id);
+      var now = hiddenImageIds.has(id);
+      if (was !== now) {
+        engine.bus._emit("image-visibility-change", {
+          imageId: id,
+          visible: visible
+        });
+      }
       engine.requestFrame();
+    }
+
+    // Snapshot of the currently-hidden image ids. Used by extensions
+    // mounting after the host has already called `setImageVisible(...,
+    // false)` — the `image-visibility-change` event is fire-and-forget,
+    // so a late mounter needs a pull-API to seed its initial state.
+    function getHiddenImageIds() {
+      return Array.from(hiddenImageIds);
     }
 
     // Memory windowing. recomputeWindow() inflates the current viewport
@@ -1925,6 +1944,7 @@
       setPanBounds: engine.setPanBounds,
       setHomeAction: engine.setHomeAction,
       setImageVisible: setImageVisible,
+      getHiddenImageIds: getHiddenImageIds,
       setMemoryWindow: setMemoryWindow,
       enableViewTracking: function(o) { viewTracker.enable(o || {}); },
       disableViewTracking: function() { viewTracker.disable("disabled"); },
@@ -2003,6 +2023,14 @@
       getImages: controller.getImages,
       imageBoundsFor: controller.imageBoundsFor,
       fitImage: fitImage,
+      // Per-image visibility on a multi-image canvas. Hidden images
+      // stay in layout (pan-bounds + fit math are anchored) but
+      // their <img> is `display: none`; the `image-visibility-change`
+      // event lets extensions pinned to a specific image hide / re-
+      // show in lockstep. `getHiddenImageIds` returns a snapshot for
+      // late-mounting extensions that need to seed their initial state.
+      setImageVisible: controller.setImageVisible,
+      getHiddenImageIds: controller.getHiddenImageIds,
       getExtension: controller.getExtension,
       // Opt-in zoom + pan constraint controls (0.5.1+). Same semantics
       // as on the viewer handle — paged readers / wallpaper croppers
