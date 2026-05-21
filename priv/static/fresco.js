@@ -2040,6 +2040,20 @@
       setZoomFloor:   function(v) { controller.setZoomFloor(v); },
       setZoomCeiling: function(v) { controller.setZoomCeiling(v); },
       setPanLocked:   function(b) { controller.setPanLocked(b); },
+      // Per-region pan clamp + custom home action (both 0.5.2+).
+      // Paged readers narrow `setPanBounds` to the current page rect
+      // so dragging never wanders into adjacent pages, and override
+      // `setHomeAction` so the nav-column reset button (+ the `0`
+      // keyboard shortcut) fits the active page instead of the
+      // whole multi-image canvas. Both were on the controller from
+      // the start but the canvas handle's surface never re-exported
+      // them — a leak fixed here.
+      setPanBounds:   function(b) { controller.setPanBounds(b); },
+      setHomeAction:  function(fn) { controller.setHomeAction(fn); },
+      // Live transform getter for consumers building layered
+      // overlays (annotation surfaces, diagnostic HUDs) that need
+      // to mirror the canvas's `{tx, ty, s}` between frames.
+      getTransform:   function() { return controller.getTransform(); },
       // 0.5.2+ view-tracking — emits "view-focus" / "view-blur" on
       // the bus when the dominant image changes. Default off; enable
       // explicitly to start.

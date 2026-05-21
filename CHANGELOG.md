@@ -4,6 +4,33 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.6 — 2026-05-21
+
+### Fixed
+
+- **`<Fresco.canvas>`'s handle now re-exports `setPanBounds`,
+  `setHomeAction`, and `getTransform`.** All three lived on the
+  underlying controller from 0.5.2 but `makeCanvasHandle` never
+  proxied them out, so consumers calling
+  `handle.setHomeAction(...)`, `handle.setPanBounds(...)`, or
+  `handle.getTransform()` got `undefined`.
+
+  User-visible result before the fix: in a multi-image canvas
+  (paged manga readers, lookbooks), the nav-column reset button
+  and the `0` keyboard shortcut both fell through to the engine's
+  default `fit()` (canvas-wide), which on a wide multi-image
+  canvas zoomed out to canvas-wide scale and shoved the visible
+  page to the edge. Consumers wanting "reset = re-fit current
+  page" had no way to install that handler. Same gap silently
+  broke per-page pan clamping (`setPanBounds(currentPage_rect)`)
+  and overlay HUDs that mirror the canvas transform
+  (`getTransform()`).
+
+  The viewer handle path is unaffected — `mountFrescoViewer`
+  returns its controller as the handle directly, so all three
+  methods were already reachable there. Only the canvas path
+  needed the proxy.
+
 ## 0.5.5 — 2026-05-21
 
 Canvas multi-image visibility now broadcasts a signal extensions
