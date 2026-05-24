@@ -4,6 +4,38 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.6.1 — 2026-05-24
+
+### Fixed
+
+- **`window.Fresco.onViewerReady` / `viewerFor` / `onReady` now
+  resolve handles registered by `fresco_strip` 0.1.0+.** 0.6.0
+  shipped with `viewerRegistry` and `readyCallbacks` as
+  closure-local vars inside `fresco.js`, while `fresco_strip`
+  registered handles into `window.Fresco.viewerRegistry`. Two
+  separate maps, no convergence — consumer calls to
+  `onViewerReady("strip-id", cb)` queued in fresco's private
+  map and never fired (the handle was on the other side).
+
+  Both registries now point at the same `window.Fresco.viewerRegistry`
+  / `window.Fresco._readyCallbacks` objects. Loading order
+  doesn't matter: whichever package's JS runs first creates the
+  shared maps; the other piggy-backs.
+
+  Also swapped `window.Fresco = {...}` (which would clobber any
+  pre-existing global from a sibling package) for
+  `Object.assign(window.Fresco, {...})` so the public-method
+  install cooperates with whichever package loaded first.
+
+  No API change. Consumers calling `window.Fresco.viewerFor(...)`
+  or `window.Fresco.onViewerReady(...)` against a
+  `<FrescoStrip.viewer>` host now work as documented.
+
+  Future hex-published peer packages (planned tiles package,
+  custom overlays, etc.) should plug into the same
+  `window.Fresco.viewerRegistry` / `window.Fresco._readyCallbacks`
+  globals — that's now the canonical contract.
+
 ## 0.6.0 — 2026-05-24
 
 `<Fresco.scroll_strip>` has been extracted into its own package,

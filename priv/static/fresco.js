@@ -58,8 +58,21 @@
   // else so future tile-source integration fails loudly rather than silently.
   // ===========================================================================
 
-  var viewerRegistry = {};        // domId → viewer handle
-  var readyCallbacks = {};        // domId → [callback, …]
+  // Handle registry + ready-callback queue live on the shared
+  // `window.Fresco` global so peer packages (currently `fresco_strip`,
+  // future ones too) can register handles into the same map. Both
+  // packages defensively idempotent-init the registry; whichever
+  // package loads first creates it, the other piggy-backs. Without
+  // this, fresco's closure-local var and fresco_strip's
+  // window-scoped var would diverge and `onViewerReady("strip-id")`
+  // calls would queue forever (fresco's queue) while the handle sat
+  // on the other map (fresco_strip's). Fixed in 0.6.1 — 0.6.0
+  // shipped with the two registries un-shared by accident.
+  window.Fresco = window.Fresco || {};
+  window.Fresco.viewerRegistry  = window.Fresco.viewerRegistry  || {};
+  window.Fresco._readyCallbacks = window.Fresco._readyCallbacks || {};
+  var viewerRegistry  = window.Fresco.viewerRegistry;
+  var readyCallbacks  = window.Fresco._readyCallbacks;
   var sourceProviders = [];       // [{predicate, factory}]
 
   sourceProviders.push({
@@ -76,7 +89,12 @@
     return { type: "image", url: url };
   }
 
-  window.Fresco = {
+  // `Object.assign` (not `window.Fresco = {...}`) so the public API
+  // surface cooperates with whichever package loaded first. A bare
+  // assignment would clobber `fresco_strip`'s defensive setup;
+  // assign-onto preserves it. Methods themselves are idempotent —
+  // re-installing them at module-load time is harmless.
+  Object.assign(window.Fresco, {
     viewerFor: function(domId) {
       return viewerRegistry[domId] || null;
     },
@@ -99,7 +117,7 @@
     registerSourceProvider: function(predicate, factory) {
       sourceProviders.unshift({ predicate: predicate, factory: factory });
     }
-  };
+  });
 
   function publishReady(domId, handle) {
     viewerRegistry[domId] = handle;
