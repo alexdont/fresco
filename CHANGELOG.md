@@ -4,6 +4,34 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.9 — 2026-05-24
+
+Two opt-in ways for peer libraries (Etcher annotations, ML
+overlays, comment threads) to suppress the `tap` event when the
+tap was actually meant for them. Backwards-compatible — neither
+path engages unless a consumer asks for it.
+
+### Added
+
+- **`handle.suppressNextTap(ms?)`** on viewer + canvas handles.
+  Default window 250 ms. Any tap landing within the window is
+  swallowed; the window is additive (re-calls extend the deadline
+  to the later of the two). Etcher calls this after committing a
+  freshly-drawn shape so the iOS-synthesized mousedown/mouseup →
+  `tap` that follows doesn't race the consumer's tap-zone
+  navigation.
+- **`[data-fresco-suppress-tap]` element attribute** — any element
+  under the tap point with this attribute (or whose ancestor has
+  it) suppresses the emit. Detected via
+  `document.elementsFromPoint`, so `pointer-events: none` elements
+  (like `.etcher-shape`) are still found. Etcher stamps it on
+  every shape element from 0.4.11+ so tapping an existing
+  annotation pins the tooltip without bubbling to consumer-side
+  tap-zone navigation.
+
+  Both paths are independent — consumers can use either, both, or
+  neither. Both default to off; existing consumers see no change.
+
 ## 0.5.8 — 2026-05-21
 
 ### Fixed

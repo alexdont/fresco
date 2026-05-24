@@ -686,8 +686,15 @@
     var customSMin = (typeof initialZoomFloor === "number") ? initialZoomFloor : null;
     var customSMax = (typeof initialZoomCeiling === "number") ? initialZoomCeiling : null;
     var panLocked = initialPanLocked;
-    var customPanBounds = null;      // {x, y, width, height} | null
-    var customHome = null;           // function | null
+    var customPanBounds = null;      // {x, y, width, height} / null
+    var customHome = null;           // function / null
+    // Deadline (ms since epoch) until which the next `tap` event
+    // emission is swallowed. Set by `suppressNextTap(ms?)` — peer
+    // libraries (Etcher, ML overlays) call it after committing a
+    // gesture that would otherwise race the OS-synthesized
+    // mousedown/mouseup → tap pipeline. Default window 250 ms is
+    // a comfortable margin for iOS Safari's synthesized events.
+    var suppressTapUntil = 0;
     var enabledGestures = Array.isArray(initialGestures) ? new Set(initialGestures) : null;
     var enabledNavButtons = Array.isArray(initialNavButtons) ? new Set(initialNavButtons) : null;
 
@@ -1090,6 +1097,39 @@
         var rect = viewportRect();
         var localX = tapCandidate.lastClientX - rect.left;
         var localY = tapCandidate.lastClientY - rect.top;
+        // Two suppression paths — either lets a consumer or peer
+        // library (Etcher annotations, custom overlays) opt out of
+        // the tap emit without forking fresco:
+        //
+        //   1. `suppressNextTap(ms?)` deadline. Useful when the
+        //      caller knows it just emitted a synthetic gesture
+        //      and wants to swallow the iOS-synthesized mousedown/
+        //      mouseup that follows.
+        //
+        //   2. `[data-fresco-suppress-tap]` on any element under
+        //      the tap point. Useful for static surfaces — Etcher
+        //      stamps it on every `.etcher-shape` so tapping a
+        //      pinned annotation never bubbles to the consumer's
+        //      tap-zone navigation. `pointer-events: none` on the
+        //      shape would have hidden it from us; the data attr
+        //      lets us see it via `elementsFromPoint` regardless.
+        var now = Date.now();
+        if (suppressTapUntil > now) {
+          return;
+        }
+        try {
+          if (typeof document.elementsFromPoint === "function") {
+            var hits = document.elementsFromPoint(
+              tapCandidate.lastClientX, tapCandidate.lastClientY
+            );
+            for (var hi = 0; hi < hits.length; hi++) {
+              var h = hits[hi];
+              if (h && h.closest && h.closest("[data-fresco-suppress-tap]")) {
+                return;
+              }
+            }
+          }
+        } catch (_) { /* defensive — never let probe errors swallow the tap */ }
         bus._emit("tap", {
           x: localX,
           y: localY,
@@ -1282,6 +1322,19 @@
       customHome = (typeof fn === "function") ? fn : null;
     }
 
+    // Swallow every `tap` event for the next `ms` (default 250).
+    // Useful for peer libraries that just emitted a gesture which
+    // will be followed by an OS-synthesized tap they want to
+    // suppress (mobile Safari fires synthesized mousedown/mouseup
+    // after touchend; the resulting tap would race the library's
+    // own state mutations). Calls are additive — re-calling
+    // extends the deadline to the later of the two.
+    function suppressNextTap(ms) {
+      var window = (typeof ms === "number" && ms > 0) ? ms : 250;
+      var deadline = Date.now() + window;
+      if (deadline > suppressTapUntil) suppressTapUntil = deadline;
+    }
+
     // Snap any input to {0, 90, 180, 270}. Re-homes so the new
     // rotation lands on a centered, on-screen view (otherwise a 90°
     // rotation at the previous tx/ty would push the content off the
@@ -1362,6 +1415,7 @@
       setPanLocked: setPanLocked,
       setPanBounds: setPanBounds,
       setHomeAction: setHomeAction,
+      suppressNextTap: suppressNextTap,
       setRotation: setRotation,
       getRotation: getRotation,
       rotateBy: rotateBy,
@@ -2162,6 +2216,7 @@
       setPanLocked: engine.setPanLocked,
       setPanBounds: engine.setPanBounds,
       setHomeAction: engine.setHomeAction,
+      suppressNextTap: engine.suppressNextTap,
       // 0.5.7+ rotation API. Without these re-exports, the canvas
       // handle's `handle.setRotation(...)` proxy at the next layer
       // up throws `TypeError: controller.setRotation is not a function`
@@ -2323,6 +2378,12 @@
       // them — a leak fixed here.
       setPanBounds:   function(b) { controller.setPanBounds(b); },
       setHomeAction:  function(fn) { controller.setHomeAction(fn); },
+      // Suppress the next `tap` event for `ms` (default 250) —
+      // peer libraries committing a gesture that races the OS-
+      // synthesized tap pipeline call this to swallow it. See
+      // `[data-fresco-suppress-tap]` for the static-element
+      // counterpart that doesn't require a function call.
+      suppressNextTap: function(ms) { controller.suppressNextTap(ms); },
       // Live transform getter for consumers building layered
       // overlays (annotation surfaces, diagnostic HUDs) that need
       // to mirror the canvas's `{tx, ty, s, rotation}` between
