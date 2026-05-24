@@ -4,6 +4,67 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.6.0 — 2026-05-24
+
+`<Fresco.scroll_strip>` has been extracted into its own package,
+[`fresco_strip`](https://hex.pm/packages/fresco_strip). Consumers
+who only need the viewer / canvas surface (lightboxes, paged
+readers, document viewers, lookbooks) now ship with ~19% less
+code; consumers who need strip mode pick up `fresco_strip` as a
+sibling dependency. Both packages contribute handles to the
+same `window.Fresco.viewerRegistry` so peer libraries (Etcher
+annotations, ML overlays, comment threads) keep working
+uniformly across both.
+
+### Removed (breaking)
+
+- **`<Fresco.scroll_strip>`** — moved to `fresco_strip` as
+  `<FrescoStrip.viewer>`. Component attrs, JS hook, handle API,
+  extension contract, and `data-*` semantics are byte-for-byte
+  unchanged.
+- **`Fresco.ScrollStrip` module** — moved to `fresco_strip` as
+  `FrescoStrip.Viewer`.
+- **`defdelegate scroll_strip(assigns)`** on `Fresco`.
+- **`makeStripHandle` JS factory** + **`FrescoScrollStrip`
+  LiveView hook** — moved to `fresco_strip/priv/static/fresco_strip.js`.
+- **`.fresco-strip-*` CSS rules** — moved to fresco_strip's
+  injected stylesheet.
+
+### Migration
+
+```diff
+ # mix.exs
+ defp deps do
+   [
+-    {:fresco, "~> 0.5.9"}
++    {:fresco, "~> 0.6.0"},
++    {:fresco_strip, "~> 0.1.0"}
+   ]
+ end
+
+ # assets/js/app.js
+ import "../../deps/fresco/priv/static/fresco.js"
++import "../../deps/fresco_strip/priv/static/fresco_strip.js"
+
+ # template
+-<Fresco.scroll_strip id="reader" sources={@pages} extensions={@ext} />
++<FrescoStrip.viewer  id="reader" sources={@pages} extensions={@ext} />
+```
+
+Three lines per consumer. **Etcher 0.4.12+** handles
+`FrescoStrip.viewer` automatically — it detects the strip
+handle at runtime via `"scrollTo" in handle` and routes through
+its existing strip-renderer. No Etcher code change required.
+
+### Why now
+
+Most recent changes lately have been strip-only. Splitting lets
+strip iterate on its own release cadence and lets viewer /
+canvas consumers stop reading changelog entries that don't
+affect them. Boundary was already clean — strip didn't share
+anything with the engine — so the extract is mostly file
+movement, not refactoring.
+
 ## 0.5.9 — 2026-05-24
 
 Two opt-in ways for peer libraries (Etcher annotations, ML
