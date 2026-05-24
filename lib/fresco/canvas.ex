@@ -698,6 +698,21 @@ defmodule Fresco.Canvas do
   Renders a Fresco canvas — N images positioned at absolute coordinates
   on a virtual canvas, with pan/zoom/fit/fullscreen identical to
   `Fresco.viewer`. Hooks the FrescoCanvas JS controller.
+
+  ## Coordinate space
+
+  Everything addressed through the canvas handle — `fitBounds`,
+  `screenToImage` / `imageToScreen`, the canvas extent reported by
+  `getCanvasSize()`, and any geometry persisted by peer libraries
+  (Etcher shape geometry, ML overlay boxes) — is in **canvas-pixel
+  space**: a single coordinate system that spans every image on the
+  canvas, sized in the canvas's internal pixels (the `:width` /
+  `:height` of the `:canvas` field on the `%Fresco.Canvas{}` struct).
+
+  This is distinct from the per-image source-pixel space used by
+  `<Fresco.scroll_strip>` / `<FrescoStrip.viewer>`, where geometry
+  lives in each image's natural-pixel grid. Code consuming geometry
+  off either viewer should know which space it's working in.
   """
   def canvas(assigns) do
     # Phoenix.Component's `attr :canvas, __MODULE__, required: true` enforces

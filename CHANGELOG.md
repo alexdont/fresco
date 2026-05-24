@@ -4,6 +4,26 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.6.2 — 2026-05-24
+
+Docs-only release. Companion note for `etcher 0.5.0` /
+`fresco_strip 0.2.0`'s deep-link work, which surfaced that the
+coordinate-space convention `<Fresco.canvas>` uses was implicit —
+spelled out anywhere code consumes geometry off the canvas handle.
+
+### Docs
+
+- **`Fresco.Canvas.canvas/1`** now has an explicit "Coordinate
+  space" section in its function doc, clarifying that
+  `fitBounds`, `screenToImage` / `imageToScreen`, the extent
+  reported by the canvas handle's `getCanvasSize()`, and any
+  geometry persisted by peer libraries (Etcher shape geometry,
+  ML overlay boxes) all live in canvas-pixel space — distinct
+  from the per-image source-pixel space used by
+  `<FrescoStrip.viewer>`.
+
+No code changes.
+
 ## 0.6.1 — 2026-05-24
 
 ### Fixed
