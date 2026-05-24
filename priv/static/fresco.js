@@ -1081,27 +1081,38 @@
         //      and wants to swallow the iOS-synthesized mousedown/
         //      mouseup that follows.
         //
-        //   2. `[data-fresco-suppress-tap]` on any element under
-        //      the tap point. Useful for static surfaces — Etcher
-        //      stamps it on every `.etcher-shape` so tapping a
-        //      pinned annotation never bubbles to the consumer's
-        //      tap-zone navigation. `pointer-events: none` on the
-        //      shape would have hidden it from us; the data attr
-        //      lets us see it via `elementsFromPoint` regardless.
+        //   2. `[data-fresco-suppress-tap]` on any element whose
+        //      bbox contains the tap point. Useful for static
+        //      surfaces — Etcher stamps it on every `.etcher-shape`
+        //      so tapping a pinned annotation never bubbles to the
+        //      consumer's tap-zone navigation. We walk
+        //      `document.querySelectorAll("[data-fresco-suppress-tap]")`
+        //      and bbox-test each rather than relying on
+        //      `elementsFromPoint`, because the latter honors
+        //      `pointer-events: none` (per spec, verified across
+        //      browsers) — and Etcher applies `pointer-events: none`
+        //      to every non-editing `.etcher-shape` so pan/zoom
+        //      passes through. The probe used to silently miss
+        //      every shape; the bbox walk catches them regardless
+        //      of CSS pointer-events.
         var now = Date.now();
         if (suppressTapUntil > now) {
           return;
         }
         try {
-          if (typeof document.elementsFromPoint === "function") {
-            var hits = document.elementsFromPoint(
-              tapCandidate.lastClientX, tapCandidate.lastClientY
-            );
-            for (var hi = 0; hi < hits.length; hi++) {
-              var h = hits[hi];
-              if (h && h.closest && h.closest("[data-fresco-suppress-tap]")) {
-                return;
-              }
+          var tapX = tapCandidate.lastClientX;
+          var tapY = tapCandidate.lastClientY;
+          var nodes = document.querySelectorAll("[data-fresco-suppress-tap]");
+          for (var ni = 0; ni < nodes.length; ni++) {
+            var n = nodes[ni];
+            if (!n || !n.getBoundingClientRect) continue;
+            var bbox = n.getBoundingClientRect();
+            if (bbox.width === 0 && bbox.height === 0) continue;
+            if (
+              tapX >= bbox.left && tapX <= bbox.right &&
+              tapY >= bbox.top  && tapY <= bbox.bottom
+            ) {
+              return;
             }
           }
         } catch (_) { /* defensive — never let probe errors swallow the tap */ }

@@ -4,6 +4,29 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.6.3 — 2026-05-25
+
+### Fixed
+
+- **`[data-fresco-suppress-tap]` probe now works for shapes with
+  `pointer-events: none`.** The 0.5.9 implementation used
+  `document.elementsFromPoint(x, y)` to walk hits under the tap
+  point, but `elementsFromPoint` honors `pointer-events` per
+  spec (verified across Chrome / Safari / Firefox) — so the
+  probe silently missed every Etcher annotation, since Etcher
+  applies `pointer-events: none` to non-editing `.etcher-shape`
+  nodes so pan/zoom passes through. The visible bug: tapping an
+  annotation near a paged-reader's left/right tap zone fired
+  BOTH Etcher's tooltip-pin AND Fresco's tap (consumer page
+  navigation flipped the page, modal opened in the background).
+  Replaced with a `document.querySelectorAll("[data-fresco-suppress-tap]")`
+  walk + per-node `getBoundingClientRect` bbox test against the
+  tap point. Same API contract for consumers; the suppression
+  now actually fires.
+
+No API changes; Etcher and any other consumer using
+`data-fresco-suppress-tap` benefits immediately.
+
 ## 0.6.2 — 2026-05-24
 
 Docs-only release. Companion note for `etcher 0.5.0` /
