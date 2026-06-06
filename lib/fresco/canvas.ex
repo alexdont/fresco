@@ -77,6 +77,35 @@ defmodule Fresco.Canvas do
   — no `setExtension` method exists, so save timing is never racing
   with annotation updates over channels.
 
+  ## Replacing the image set in place — `handle.setSources/2`
+
+  `handle.setSources(sources, opts)` swaps the canvas's whole image set
+  without remounting the DOM, so state tied to the page session — Pointer
+  Lock, audio/video pipelines, peer overlays bound via `handle.on(...)` —
+  survives. It's the in-place alternative to a full navigation; consumers
+  building paged readers use it for instant chapter transitions.
+
+      await handle.setSources(images, {
+        reset_view: true,                                  # fit-to-canvas after swap (default)
+        extensions: %{ etcher: %{ annotations: shapes } }  # optional, replaced atomically
+      })
+
+  `sources` is an array of `%{src, x?, y?, width?, height?, id?, z_index?}`
+  (the `getImages()` shape). `opts`:
+
+    * `reset_view` (default `true`) — fit to the new canvas after the swap;
+      `false` keeps the current pan/zoom (clamped to the new bounds).
+    * `extensions` — replaces the canvas-level extension map atomically with
+      the swap (omitted → the current map is left untouched).
+    * `canvasWidth` / `canvasHeight` — explicit canvas extent; omitted →
+      derived from the new images' bounding box.
+
+  Returns a Promise that resolves once the first new frame is decodable, and
+  rejects on empty/malformed input (so the consumer can fall back to a full
+  navigation). It fires `open` and a dedicated `sources-changed` event so
+  overlays bound to those rebuild. It is programmatic-only — no "user did
+  this" event — and the consumer owns persistence, URL history, etc.
+
   See `Fresco.Viewer` for the simpler single-image component, and
   `Fresco.ScrollStrip` for the long-scroll reader counterpart.
   """

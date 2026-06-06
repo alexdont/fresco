@@ -4,7 +4,24 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.6.3 — 2026-05-25
+## 0.7.0 — 2026-06-06
+
+### Added
+
+- **`handle.setSources(sources, opts)` — replace a `<Fresco.canvas>`'s image
+  set in place.** Swaps the current images for a new set without remounting
+  the DOM, so state tied to the page session — Pointer Lock, audio/video
+  pipelines, peer overlays bound via `handle.on(...)` — survives. `sources`
+  is an array of `{src, x?, y?, width?, height?, id?, z_index?}` (the
+  `getImages()` shape; `w`/`h` accepted as aliases). `opts` accepts
+  `reset_view` (default `true`, fit-to-canvas after the swap; `false` keeps
+  the current pan/zoom), an optional `extensions` map (replaces canvas-level
+  extensions atomically with the swap, e.g. `extensions.etcher.annotations`),
+  and optional `canvasWidth` / `canvasHeight` (else the new images' bounding
+  box). Returns a Promise that resolves once the first new frame is decodable
+  and rejects on empty/malformed input. Fires the existing `open` event plus
+  a new `sources-changed` event so overlays rebuild. Programmatic-only and
+  additive — the initial-mount path and all existing handles are unchanged.
 
 ### Fixed
 

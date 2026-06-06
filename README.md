@@ -103,6 +103,28 @@ Pass `:sources` (a list of maps) instead of `:src` to lay multiple images out on
 
 > ⚠️ **Caveat:** `handle.imageToScreen` / `screenToImage` currently operate on the **first source only**. If you're building an extension that needs to address pixels in source #2+ (e.g. annotations on a second image in the layout), you'll need to apply the offset yourself for now. Multi-image coordinate disambiguation is planned but not yet implemented.
 
+### Swapping the image set in place — `handle.setSources`
+
+On a `<Fresco.canvas>`, `handle.setSources(sources, opts)` replaces the entire image set **without remounting the DOM** — so state tied to the page session survives the swap: an engaged **Pointer Lock**, an audio/video pipeline, and peer overlays bound via `handle.on(...)`. It's the in-place alternative to `window.location.href = …`; paged readers use it for instant chapter transitions.
+
+```js
+const handle = window.Fresco.viewerFor("reader");
+await handle.setSources(nextChapter.images, {
+  reset_view: true,                                   // fit-to-canvas after swap (default)
+  extensions: { etcher: { annotations: nextChapter.shapes } }, // optional, replaced atomically
+});
+// state that would die on a full navigation (Pointer Lock, etc.) is still alive
+history.pushState({}, "", nextChapter.url);
+```
+
+- `sources` — array of `{ src, x?, y?, width?, height?, id?, z_index? }` (the `getImages()` shape). `w`/`h` are accepted as aliases for `width`/`height`.
+- `opts.reset_view` — `true` (default) fits to the new canvas; `false` keeps the current pan/zoom (clamped to the new bounds).
+- `opts.extensions` — replaces the canvas-level extension map **atomically** with the swap (e.g. `extensions.etcher.annotations`). Omitted → the current map is left untouched.
+- `opts.canvasWidth` / `opts.canvasHeight` — explicit canvas extent; omitted → the new images' bounding box.
+- Returns a **Promise** that resolves once the first new frame is decodable; **rejects** on empty/malformed input so you can fall back to a full navigation.
+- Fires `open` and a dedicated `sources-changed` event so overlays bound to them rebuild. It's programmatic-only (no "user did this" event) — you own URL history, server notification, and persistence.
+- Replace-everything by design: it doesn't diff old vs new (re-setting identical `src`s hits the browser cache). Canvas-only; the single-image viewer keeps `setSource` / `swapSourcePreservingBounds`.
+
 ---
 
 ## Optimized pan for long-scroll content

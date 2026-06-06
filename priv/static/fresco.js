@@ -26,12 +26,14 @@
 // Canvas handle (additionally):
 //
 //   { getCanvasSize(), getImages(), imageBoundsFor(id), fitImage(id),
-//     getExtension(name) }
+//     getExtension(name),
+//     setSources(sources, opts) → Promise   // replace the image set in place }
 //
 // Events fired through `handle.on(eventName, fn)`:
 //   "zoom" / "pan" / "open" / "resize"           — fired on intent
 //   "animation" / "update-viewport"              — fired per-frame
 //   "image-loaded"                               — canvas only; per-image load events
+//   "sources-changed"                            — canvas only; setSources completed
 //
 // Notes vs. 0.4.x:
 //   - `handle.openSeadragon` / `handle.viewer` are gone. The engine is no
@@ -2170,6 +2172,159 @@
       viewTracker.enable(trackOpts);
     }
 
+    // Replace the entire image set in place, without remounting the DOM, so
+    // consumer state tied to the page session (Pointer Lock, audio/video
+    // pipelines, peer overlays bound via `handle.on(...)`) survives. Additive
+    // + programmatic — no initial-mount path changes, fires no "user did
+    // this" event. See the public-handle proxy for the documented signature.
+    //
+    //   sources : non-empty array of `{ src|url, x?, y?, width?|w?, height?|h?,
+    //             id?, z_index?|zIndex? }` (the `getImages()` shape).
+    //   opts    : { reset_view?: bool=true, extensions?: map,
+    //               canvasWidth?: number, canvasHeight?: number }
+    //   → Promise<void> that resolves once the first new frame is decodable;
+    //     rejects synchronously on empty / malformed input.
+    var pendingSourcesResolve = null;
+    function setSources(sources, opts) {
+      opts = opts || {};
+      return new Promise(function(resolve, reject) {
+        function num(v, d) { return (typeof v === "number" && isFinite(v)) ? v : d; }
+
+        // Validate up front so a bad call can't blank the viewer mid-read,
+        // and (importantly) doesn't cancel an in-flight good swap.
+        if (!Array.isArray(sources) || sources.length === 0) {
+          reject(new Error("[Fresco] setSources: `sources` must be a non-empty array"));
+          return;
+        }
+        var normalized = [];
+        for (var i = 0; i < sources.length; i++) {
+          var s = sources[i] || {};
+          var src = s.src || s.url;
+          if (typeof src !== "string" || !src) {
+            reject(new Error("[Fresco] setSources: image " + i + " has no `src`"));
+            return;
+          }
+          normalized.push({
+            id: (s.id != null ? String(s.id) : ("img-" + (i + 1))),
+            src: src,
+            x: num(s.x, 0),
+            y: num(s.y, 0),
+            width: num(s.width != null ? s.width : s.w, 0),
+            height: num(s.height != null ? s.height : s.h, 0),
+            zIndex: num(s.z_index != null ? s.z_index : s.zIndex, 0)
+          });
+        }
+
+        // A newer call supersedes an in-flight one: resolve the previous
+        // Promise (consumers can't distinguish racing calls, so resolving is
+        // friendlier than rejecting) and proceed with this set.
+        if (pendingSourcesResolve) {
+          var prev = pendingSourcesResolve;
+          pendingSourcesResolve = null;
+          prev();
+        }
+
+        // Cancel any in-flight gesture so a pan/zoom doesn't continue against
+        // images that no longer exist. Best-effort — guarded for engines
+        // without the hook; the re-fit below overrides a stale transform.
+        if (typeof engine.cancelGesture === "function") {
+          try { engine.cancelGesture(); } catch (_) {}
+        }
+
+        // Replace canvas-level extensions atomically with the swap (before
+        // relayout) so a peer re-reading the DOM never sees new images with
+        // the old extension map. Omitted → keep the current map untouched.
+        if (opts.extensions && typeof opts.extensions === "object") {
+          try { el.dataset.extensions = JSON.stringify(opts.extensions); } catch (_) {}
+        }
+
+        // Release the previous set's decoded bitmaps + DOM nodes.
+        var old = Array.prototype.slice.call(
+          stage.querySelectorAll("[data-fresco-canvas-img]")
+        );
+        old.forEach(function(im) {
+          im.removeEventListener("load", onImgLoad);
+          try { im.removeAttribute("src"); } catch (_) {}
+          if (im.parentNode) im.parentNode.removeChild(im);
+        });
+
+        // Canvas extent: explicit opts → bounding box of the new images →
+        // keep the current dims as a last resort.
+        var cw = num(opts.canvasWidth != null ? opts.canvasWidth : opts.canvas_width, 0);
+        var ch = num(opts.canvasHeight != null ? opts.canvasHeight : opts.canvas_height, 0);
+        if (cw <= 0 || ch <= 0) {
+          var bx = 0, by = 0;
+          for (var j = 0; j < normalized.length; j++) {
+            var n = normalized[j];
+            if (n.x + n.width > bx) bx = n.x + n.width;
+            if (n.y + n.height > by) by = n.y + n.height;
+          }
+          if (cw <= 0) cw = bx > 0 ? bx : canvasW;
+          if (ch <= 0) ch = by > 0 ? by : canvasH;
+        }
+        el.dataset.canvasWidth = String(cw);
+        el.dataset.canvasHeight = String(ch);
+
+        // Build the new <img> elements, mirroring the server-rendered shape
+        // (`refreshLayout` re-reads them + drives positioning from the data
+        // attrs; `applyChildren` sets left/top/width/height each frame).
+        var firstImg = null;
+        normalized.forEach(function(n, idx) {
+          var im = document.createElement("img");
+          im.setAttribute("data-fresco-canvas-img", "");
+          im.setAttribute("data-image-id", n.id);
+          im.dataset.canvasX = String(n.x);
+          im.dataset.canvasY = String(n.y);
+          im.dataset.canvasWidth = String(n.width);
+          if (n.height > 0) im.dataset.canvasHeight = String(n.height);
+          im.dataset.zIndex = String(n.zIndex);
+          im.draggable = false;
+          im.alt = "";
+          im.style.position = "absolute";
+          im.style.maxWidth = "none";
+          im.style.maxHeight = "none";
+          if (n.zIndex) im.style.zIndex = String(n.zIndex);
+          im.src = n.src;
+          stage.appendChild(im);
+          if (idx === 0) firstImg = im;
+        });
+
+        // Re-read imgs + dims, recompute layout (same path as the hook's
+        // `updated`), then fit unless the consumer is preserving the view.
+        refreshLayout();
+        if (opts.reset_view !== false) engine.fit();
+
+        // Re-emit the mount-ready signal (peers bound to `open` rebuild for
+        // free) plus a dedicated `sources-changed` for swap-aware peers.
+        engine.bus._emit("open", {
+          canvasWidth: cw, canvasHeight: ch, imageCount: normalized.length
+        });
+        engine.bus._emit("sources-changed", {
+          imageCount: normalized.length,
+          extensionsReplaced: !!(opts.extensions && typeof opts.extensions === "object"),
+          resetView: opts.reset_view !== false
+        });
+
+        // Resolve once the first new image is decodable. The layout already
+        // renders without waiting (canvas dims are known), so this just times
+        // resolution to the decode; never hang (timeout + error both resolve).
+        pendingSourcesResolve = resolve;
+        function done() {
+          if (pendingSourcesResolve === resolve) pendingSourcesResolve = null;
+          resolve();
+        }
+        if (!firstImg) { done(); return; }
+        if (firstImg.complete && firstImg.naturalWidth > 0) { done(); return; }
+        var to = setTimeout(done, 3000);
+        firstImg.addEventListener("load", function onl() {
+          firstImg.removeEventListener("load", onl); clearTimeout(to); done();
+        }, { once: true });
+        firstImg.addEventListener("error", function one() {
+          firstImg.removeEventListener("error", one); clearTimeout(to); done();
+        }, { once: true });
+      });
+    }
+
     // Tear down on the canvas's destroyed lifecycle — flush a final
     // view-blur with reason "destroyed" so consumers can persist a
     // pending duration. Wrap engine.teardown so consumers don't have
@@ -2182,6 +2337,7 @@
 
     return {
       el: el,
+      setSources: setSources,
       stage: stage,
       imgs: imgs,
       navEl: engine.navEl,
@@ -2337,6 +2493,18 @@
       getImages: controller.getImages,
       imageBoundsFor: controller.imageBoundsFor,
       fitImage: fitImage,
+      // Replace the whole image set in place (no DOM remount) — page-session
+      // state (Pointer Lock, media pipelines, peer overlays bound via
+      // `handle.on(...)`) survives. `sources` is an array of
+      // `{ src, x?, y?, width?, height?, id?, z_index? }`; `opts` accepts
+      // `reset_view` (default true → fit-to-canvas after the swap), an
+      // optional `extensions` map (atomically replaces canvas-level
+      // extensions, e.g. `extensions.etcher.annotations`), and optional
+      // `canvasWidth`/`canvasHeight` (else the new images' bounding box).
+      // Returns a Promise that resolves once the first new frame is
+      // decodable; rejects on empty/malformed input. Fires `open` +
+      // `sources-changed` so overlays rebuild.
+      setSources: controller.setSources,
       // Per-image visibility on a multi-image canvas. Hidden images
       // stay in layout (pan-bounds + fit math are anchored) but
       // their <img> is `display: none`; the `image-visibility-change`
