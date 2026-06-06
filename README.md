@@ -121,9 +121,26 @@ history.pushState({}, "", nextChapter.url);
 - `opts.reset_view` — `true` (default) fits to the new canvas; `false` keeps the current pan/zoom (clamped to the new bounds).
 - `opts.extensions` — replaces the canvas-level extension map **atomically** with the swap (e.g. `extensions.etcher.annotations`). Omitted → the current map is left untouched.
 - `opts.canvasWidth` / `opts.canvasHeight` — explicit canvas extent; omitted → the new images' bounding box.
-- Returns a **Promise** that resolves once the first new frame is decodable; **rejects** on empty/malformed input so you can fall back to a full navigation.
+- Returns a **Promise** that resolves **after the first post-swap frame paints** (the new images are positioned/sized), so `imageBoundsFor(...)` / `getBoundingClientRect()` return measurable rects on the next line; **rejects** on empty/malformed input so you can fall back to a full navigation.
+- **Resets the hidden-image set** — new images don't inherit a previous set's `setImageVisible(id, false)` bookkeeping. To preserve it, snapshot `handle.getHiddenImageIds()` before the swap and re-apply after.
 - Fires `open` and a dedicated `sources-changed` event so overlays bound to them rebuild. It's programmatic-only (no "user did this" event) — you own URL history, server notification, and persistence.
 - Replace-everything by design: it doesn't diff old vs new (re-setting identical `src`s hits the browser cache). Canvas-only; the single-image viewer keeps `setSource` / `swapSourcePreservingBounds`.
+
+#### Per-image helpers for paged readers
+
+A reader that shows one page at a time and cycles a "load window" of in-flight images pairs `setSources` with:
+
+- **`handle.setImageVisible(id, visible)`** — toggle one image without removing it from the layout. The inline visibility flips **synchronously**, so a `getBoundingClientRect` / `imageBoundsFor` read on the next line sees the new state.
+- **`handle.setImageSrc(id, url)`** — swap a single image's `src` (real URL ↔ placeholder) without a full relayout; re-latches load tracking so `image-loaded` fires on the new source.
+- **`handle.whenLayoutSettled()`** — a Promise that resolves once the next frame has painted, for measuring between those mutations (`setSources` already resolves on this gate).
+
+```js
+// navigate to page N within the loaded chapter
+handle.setImageSrc("page-" + n, pageMeta.url);   // swap placeholder → real
+handle.setImageVisible("page-" + cur, false);    // hide the old page
+handle.setImageVisible("page-" + n, true);       // show the new one (synchronous)
+handle.fitBounds(handle.imageBoundsFor("page-" + n));  // measures correctly now
+```
 
 ---
 

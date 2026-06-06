@@ -4,6 +4,33 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.1 — 2026-06-06
+
+### Added
+
+- **`handle.setImageSrc(id, url)`** — swap a single canvas image's source in
+  place (e.g. a paged reader cycling its load window between a real URL and
+  a placeholder) without re-running the full layout. Re-attaches Fresco's
+  load listener so `image-loaded` fires on the new source and the rect
+  settles once the new natural dimensions arrive.
+- **`handle.whenLayoutSettled()`** — Promise that resolves after the next
+  frame paints, for measuring rects between per-image mutations.
+
+### Changed
+
+- **`setSources` resets the hidden-image set.** New images no longer inherit
+  the previous set's `setImageVisible(id, false)` bookkeeping. Consumers that
+  want to preserve it should snapshot `getHiddenImageIds()` before the swap
+  and re-apply after (symmetric with the palette not being preserved).
+- **`setImageVisible` flips inline visibility synchronously.** The matching
+  `<img>`'s `style.visibility` is set immediately (still `requestFrame` for
+  positioning), so a `getBoundingClientRect` / `imageBoundsFor` read right
+  after returns the new state instead of lagging a frame.
+- **`setSources`'s Promise resolves one frame later** — after the first
+  post-swap `applyChildren` paints, rather than at first-decode, so
+  `imageBoundsFor` and friends return measurable rects on the next line. One
+  extra animation frame of latency; strictly better for measure-after-swap.
+
 ## 0.7.0 — 2026-06-06
 
 ### Added

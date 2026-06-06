@@ -100,11 +100,30 @@ defmodule Fresco.Canvas do
     * `canvasWidth` / `canvasHeight` — explicit canvas extent; omitted →
       derived from the new images' bounding box.
 
-  Returns a Promise that resolves once the first new frame is decodable, and
-  rejects on empty/malformed input (so the consumer can fall back to a full
-  navigation). It fires `open` and a dedicated `sources-changed` event so
-  overlays bound to those rebuild. It is programmatic-only — no "user did
-  this" event — and the consumer owns persistence, URL history, etc.
+  Returns a Promise that resolves after the first post-swap frame paints
+  (the new images are positioned/sized), so `imageBoundsFor(...)` returns
+  measurable rects on the next line; it rejects on empty/malformed input
+  (so the consumer can fall back to a full navigation). It clears the
+  hidden-image set (`setImageVisible` bookkeeping doesn't carry across a
+  swap), fires `open` and a dedicated `sources-changed` event so overlays
+  bound to those rebuild, and is programmatic-only — the consumer owns
+  persistence, URL history, etc.
+
+  ## Per-image helpers (paged readers)
+
+  Paged readers that show one page at a time and cycle a "load window" of
+  in-flight images use two companions, both on the canvas handle:
+
+    * `handle.setImageVisible(id, visible)` — toggles one image's visibility.
+      The inline style flips **synchronously**, so a `getBoundingClientRect`
+      / `imageBoundsFor` read on the next line sees the new state.
+    * `handle.setImageSrc(id, url)` — swaps a single image's `src` (real URL
+      ↔ placeholder) without a full relayout, re-latching load tracking so
+      `image-loaded` fires on the new source.
+
+  After any such mutation, `await handle.whenLayoutSettled()` resolves once
+  the next frame has painted, for consumers that need to measure between
+  swaps.
 
   See `Fresco.Viewer` for the simpler single-image component, and
   `Fresco.ScrollStrip` for the long-scroll reader counterpart.

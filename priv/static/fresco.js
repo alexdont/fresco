@@ -27,7 +27,9 @@
 //
 //   { getCanvasSize(), getImages(), imageBoundsFor(id), fitImage(id),
 //     getExtension(name),
-//     setSources(sources, opts) → Promise   // replace the image set in place }
+//     setSources(sources, opts) → Promise,  // replace the image set in place
+//     setImageSrc(id, url),                  // swap one image's src (load-window paging)
+//     whenLayoutSettled() → Promise }        // resolves after the next frame paints
 //
 // Events fired through `handle.on(eventName, fn)`:
 //   "zoom" / "pan" / "open" / "resize"           — fired on intent
@@ -2019,6 +2021,17 @@
       if (visible) hiddenImageIds.delete(id);
       else hiddenImageIds.add(id);
       var now = hiddenImageIds.has(id);
+      // Flip the matching <img>'s inline visibility synchronously so a
+      // consumer reading getBoundingClientRect / imageBoundsFor on the very
+      // next line sees the new state — `applyChildren` (rAF-deferred) would
+      // otherwise lag a frame. If the element isn't present yet (race with a
+      // pending refreshLayout), skip; the next applyChildren will apply it.
+      for (var i = 0; i < imgs.length; i++) {
+        if (imgs[i].dataset.imageId === id) {
+          imgs[i].style.visibility = visible ? "" : "hidden";
+          break;
+        }
+      }
       if (was !== now) {
         engine.bus._emit("image-visibility-change", {
           imageId: id,
@@ -2215,6 +2228,13 @@
           });
         }
 
+        // The id namespace just changed — drop the previous set's hidden-
+        // image bookkeeping so brand-new images don't inherit a stale
+        // `setImageVisible(id, false)` from the old set. Symmetric with how
+        // the palette isn't preserved; a consumer that wants to carry hidden
+        // state snapshots `getHiddenImageIds()` before the swap and re-applies.
+        hiddenImageIds.clear();
+
         // A newer call supersedes an in-flight one: resolve the previous
         // Promise (consumers can't distinguish racing calls, so resolving is
         // friendlier than rejecting) and proceed with this set.
@@ -2268,8 +2288,7 @@
         // Build the new <img> elements, mirroring the server-rendered shape
         // (`refreshLayout` re-reads them + drives positioning from the data
         // attrs; `applyChildren` sets left/top/width/height each frame).
-        var firstImg = null;
-        normalized.forEach(function(n, idx) {
+        normalized.forEach(function(n) {
           var im = document.createElement("img");
           im.setAttribute("data-fresco-canvas-img", "");
           im.setAttribute("data-image-id", n.id);
@@ -2286,7 +2305,6 @@
           if (n.zIndex) im.style.zIndex = String(n.zIndex);
           im.src = n.src;
           stage.appendChild(im);
-          if (idx === 0) firstImg = im;
         });
 
         // Re-read imgs + dims, recompute layout (same path as the hook's
@@ -2305,23 +2323,65 @@
           resetView: opts.reset_view !== false
         });
 
-        // Resolve once the first new image is decodable. The layout already
-        // renders without waiting (canvas dims are known), so this just times
-        // resolution to the decode; never hang (timeout + error both resolve).
-        pendingSourcesResolve = resolve;
+        // Resolve after the first post-swap frame paints — i.e. after
+        // `applyChildren` has positioned/sized the new <img>s — so the
+        // consumer can `imageBoundsFor(...)` / `getBoundingClientRect()` on
+        // the next line and get measurable rects (not the zeros/stale rects
+        // visible if we resolved at decode time). `update-viewport` fires at
+        // the end of the engine's frame, just after `applyChildren`.
+        var settled = false;
+        var unsub = null;
+        var safety = null;
         function done() {
-          if (pendingSourcesResolve === resolve) pendingSourcesResolve = null;
+          if (settled) return;
+          settled = true;
+          if (unsub) { try { unsub(); } catch (_) {} }
+          if (safety) clearTimeout(safety);
+          if (pendingSourcesResolve === done) pendingSourcesResolve = null;
           resolve();
         }
-        if (!firstImg) { done(); return; }
-        if (firstImg.complete && firstImg.naturalWidth > 0) { done(); return; }
-        var to = setTimeout(done, 3000);
-        firstImg.addEventListener("load", function onl() {
-          firstImg.removeEventListener("load", onl); clearTimeout(to); done();
-        }, { once: true });
-        firstImg.addEventListener("error", function one() {
-          firstImg.removeEventListener("error", one); clearTimeout(to); done();
-        }, { once: true });
+        pendingSourcesResolve = done;
+        engine.requestFrame();                       // ensure a frame is scheduled
+        unsub = engine.bus.on("update-viewport", done);
+        safety = setTimeout(done, 1000);             // never hang
+      });
+    }
+
+    // Swap a single image's source in place — e.g. a paged reader cycling
+    // its load window between a real (proxied) URL and a lightweight
+    // placeholder — without re-running the full layout. Re-latches fresco's
+    // load tracking so `image-loaded` fires on the new src and the rect
+    // settles once the new natural dims arrive. Returns true if an image
+    // with `id` exists. Symmetric with `setImageVisible`.
+    function setImageSrc(id, url) {
+      if (typeof url !== "string" || !url) return false;
+      for (var i = 0; i < imgs.length; i++) {
+        var im = imgs[i];
+        if (im.dataset.imageId === id) {
+          im.src = url;
+          if (!im.complete) im.addEventListener("load", onImgLoad);
+          engine.requestFrame();
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // Resolve after the next frame paints (after `applyChildren`), so a
+    // consumer that just mutated layout — `setImageVisible`, `setImageSrc`,
+    // a manual DOM tweak — can `await` measurable rects. (`setSources`
+    // already resolves on this gate; this covers the in-between mutations.)
+    function whenLayoutSettled() {
+      return new Promise(function(resolve) {
+        var u = null, t = null;
+        function fin() {
+          if (u) { try { u(); } catch (_) {} }
+          if (t) clearTimeout(t);
+          resolve();
+        }
+        engine.requestFrame();
+        u = engine.bus.on("update-viewport", fin);
+        t = setTimeout(fin, 1000);
       });
     }
 
@@ -2338,6 +2398,8 @@
     return {
       el: el,
       setSources: setSources,
+      setImageSrc: setImageSrc,
+      whenLayoutSettled: whenLayoutSettled,
       stage: stage,
       imgs: imgs,
       navEl: engine.navEl,
@@ -2505,6 +2567,12 @@
       // decodable; rejects on empty/malformed input. Fires `open` +
       // `sources-changed` so overlays rebuild.
       setSources: controller.setSources,
+      // Swap one image's `src` in place (load-window paging) without a full
+      // relayout; re-latches load tracking so `image-loaded` fires.
+      setImageSrc: controller.setImageSrc,
+      // Promise that resolves after the next frame paints — `await` it to
+      // measure rects after a `setImageVisible` / `setImageSrc` mutation.
+      whenLayoutSettled: controller.whenLayoutSettled,
       // Per-image visibility on a multi-image canvas. Hidden images
       // stay in layout (pan-bounds + fit math are anchored) but
       // their <img> is `display: none`; the `image-visibility-change`
