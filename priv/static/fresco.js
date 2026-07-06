@@ -2680,6 +2680,30 @@
       this._layoutRev = this.el.dataset.canvasWidth + "x" + this.el.dataset.canvasHeight + ":" +
                         this.el.querySelectorAll("[data-fresco-canvas-img]").length;
       publishReady(this.el.id, handle);
+      // Opt-in server bridge (`data-persist-rotation="true"`): forward the
+      // client-side `rotate` event to the LiveView/LiveComponent so a host can
+      // persist the user's chosen rotation. This is the only pushEvent in
+      // Fresco and is off by default — consumers who don't opt in pay nothing.
+      // Payload: the canvas element id (which canvas) + the new angle, with
+      // `previous` so a host can diff. Fires on every rotation change,
+      // including the Reset-view button snapping back to home rotation.
+      if (this.el.dataset.persistRotation === "true") {
+        var self = this;
+        this._rotateOff = handle.on("rotate", function(e) {
+          var payload = { id: self.el.id, rotation: e.rotation, previous: e.previous };
+          // Route to the LiveComponent that owns the canvas element (via
+          // `pushEventTo(this.el, …)`) when there is one, else the LiveView.
+          // A bare `pushEvent` always targets the root LiveView, which breaks
+          // when the host handles the event in the component that renders the
+          // canvas (e.g. a media viewer LiveComponent). Mirrors Etcher's
+          // `pushEventTo(this.el, …)` convention.
+          if (self.pushEventTo) {
+            self.pushEventTo(self.el, "fresco:rotate", payload);
+          } else if (self.pushEvent) {
+            self.pushEvent("fresco:rotate", payload);
+          }
+        });
+      }
     },
 
     updated: function() {
@@ -2696,6 +2720,7 @@
     },
 
     destroyed: function() {
+      if (this._rotateOff) { try { this._rotateOff(); } catch (_) {} this._rotateOff = null; }
       if (this.el && this.el.id) unpublish(this.el.id);
       if (this.controller) {
         try { this.controller.teardown(); } catch (_) {}

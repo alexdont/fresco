@@ -4,6 +4,28 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.8.0 — 2026-07-06
+
+### Added
+
+- **`persist_rotation` attr on `<Fresco.canvas>`** — an opt-in server bridge for
+  persisting the user's rotation. When `true`, the `FrescoCanvas` hook forwards
+  every rotation change to the server as a `"fresco:rotate"` LiveView event
+  (`%{"id" => canvas_id, "rotation" => deg, "previous" => prev}`, degrees in
+  `{0, 90, 180, 270}`). Off by default — this is the only server round-trip
+  Fresco makes, so consumers who don't persist pay nothing. Routes to the
+  `LiveComponent` that owns the canvas (via `pushEventTo`), else the `LiveView`.
+  Pair with `:initial_rotation` to round-trip a saved rotation across mounts.
+
+### Changed
+
+- **Reset-view now clears rotation too.** The Reset-view nav button and the `0`
+  key previously re-fit only zoom/pan, leaving any rotation applied by the
+  `+90°` button in place. They now also return rotation to the mount-time value
+  (`:initial_rotation`, so a persisted rotation is preserved rather than forced
+  to `0`). `handle.requestHome()` and `setRotation`'s internal re-home are
+  unchanged — they still leave rotation alone.
+
 ## 0.7.1 — 2026-06-06
 
 ### Added
