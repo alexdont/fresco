@@ -642,6 +642,10 @@
     // Image-pixel math (imageToScreen / screenToImage / fit / clamp)
     // applies the rotation analytically — see `rotationCosSin`.
     var rot = normalizeRotation(initialRotation || 0);
+    // The rotation "reset view" returns to — the mount-time rotation, so
+    // `resetView()` (Reset-view button + "0" key) undoes the +90° rotate
+    // clicks without discarding a consumer's persisted `initial_rotation`.
+    var homeRotation = rot;
     var nw = 0, nh = 0;          // natural extent (image natural for viewer; canvas dims for canvas)
     var vw = 0, vh = 0;          // viewport
     var sFit = 1, sMin = 1, sMax = 8;
@@ -1164,7 +1168,7 @@
         case "ArrowRight": panBy(-60, 0); break;
         case "+": case "=": zoomAt(vw / 2, vh / 2, 1.4); break;
         case "-": case "_": zoomAt(vw / 2, vh / 2, 1 / 1.4); break;
-        case "0": requestHome(); break;
+        case "0": resetView(); break;
         case "f": case "F": toggleFullscreen(); break;
         default: handled = false;
       }
@@ -1206,7 +1210,7 @@
     el.addEventListener("dragstart", onDragStart);
 
     var navEl = buildNav(el, {
-      onFit: function() { requestHome(); },
+      onFit: function() { resetView(); },
       onZoomIn: function() {
         var rect = viewportRect();
         vw = rect.width; vh = rect.height;
@@ -1364,6 +1368,22 @@
       } else {
         fit();
       }
+    }
+
+    // Full "reset view": zoom, pan AND rotation. The bare `requestHome()`
+    // only re-fits zoom/pan (it's the internal re-home that `setRotation`
+    // itself calls, so it must NOT touch rotation). The Reset-view nav
+    // button and the "0" key route here instead, so a user who rotated with
+    // the +90° button gets rotation cleared back to `homeRotation` too.
+    // Rotation is reset inline (not via `setRotation`) to avoid its extra
+    // re-home; a single `requestHome()` then fits against the reset rotation.
+    function resetView() {
+      if (rot !== homeRotation) {
+        var previous = rot;
+        rot = homeRotation;
+        bus._emit("rotate", { rotation: rot, previous: previous });
+      }
+      requestHome();
     }
 
     // Allowlists. Passing an array of strings limits which gestures
