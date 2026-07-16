@@ -175,6 +175,29 @@ defmodule Fresco.Viewer do
     """
   )
 
+  attr(:persist_rotation, :boolean,
+    default: false,
+    doc: """
+    Forwards the client-side `rotate` event to the server so a host can
+    **persist** the user's chosen rotation. When `true`, the `FrescoViewer`
+    hook pushes a `"fresco:rotate"` LiveView event on every rotation change
+    (rotate button, `handle.setRotation/rotateBy`, and the Reset-view snap
+    back to home). Defaults to `false` so consumers who don't persist pay
+    nothing — this is the only server round-trip Fresco makes.
+
+    The event routes to whichever LiveView or LiveComponent owns the viewer
+    element (standard hook `pushEvent` targeting). Payload:
+
+        # handle_event("fresco:rotate", %{"id" => id, "rotation" => deg,
+        #                                 "previous" => prev}, socket)
+
+    `id` is the viewer element id (disambiguates multiple viewers);
+    `rotation`/`previous` are degrees in `{0, 90, 180, 270}`. Pair with
+    `:initial_rotation` (seed the saved angle on mount) to round-trip a
+    persisted rotation.
+    """
+  )
+
   attr(:rest, :global)
 
   @doc """
@@ -203,6 +226,7 @@ defmodule Fresco.Viewer do
       data-gestures={@gestures_csv}
       data-nav-buttons={@nav_buttons_csv}
       data-initial-rotation={@initial_rotation != 0 && to_string(@initial_rotation)}
+      data-persist-rotation={@persist_rotation && "true"}
       class={[
         "fresco-viewer",
         @class,

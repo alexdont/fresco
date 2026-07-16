@@ -134,6 +134,33 @@
     delete viewerRegistry[domId];
   }
 
+  // Opt-in server bridge (`data-persist-rotation="true"`): forward the
+  // client-side `rotate` event to the LiveView/LiveComponent so a host can
+  // persist the user's chosen rotation. This is the only pushEvent in
+  // Fresco and is off by default — consumers who don't opt in pay nothing.
+  // Payload: the host element id (which viewer/canvas) + the new angle,
+  // with `previous` so a host can diff. Fires on every rotation change,
+  // including the Reset-view button snapping back to home rotation.
+  // Shared by the FrescoViewer and FrescoCanvas hooks; returns the bus
+  // unsubscribe (or null when not opted in) for the hook's destroyed().
+  function wireRotationBridge(hook) {
+    if (hook.el.dataset.persistRotation !== "true") return null;
+    return hook.handle.on("rotate", function(e) {
+      var payload = { id: hook.el.id, rotation: e.rotation, previous: e.previous };
+      // Route to the LiveComponent that owns the host element (via
+      // `pushEventTo(el, …)`) when there is one, else the LiveView.
+      // A bare `pushEvent` always targets the root LiveView, which breaks
+      // when the host handles the event in the component that renders the
+      // element (e.g. a media viewer LiveComponent). Mirrors Etcher's
+      // `pushEventTo(this.el, …)` convention.
+      if (hook.pushEventTo) {
+        hook.pushEventTo(hook.el, "fresco:rotate", payload);
+      } else if (hook.pushEvent) {
+        hook.pushEvent("fresco:rotate", payload);
+      }
+    });
+  }
+
   // ===========================================================================
   // Heroicons (outline, 24×24, stroke="currentColor")
   // ===========================================================================
@@ -1635,6 +1662,9 @@
       setZoomFloor: engine.setZoomFloor,
       setZoomCeiling: engine.setZoomCeiling,
       setPanLocked: engine.setPanLocked,
+      setRotation: engine.setRotation,
+      getRotation: engine.getRotation,
+      rotateBy: engine.rotateBy,
       setSource: setSource,
       swapSourcePreservingBounds: swapSourcePreservingBounds,
       teardown: engine.teardown
@@ -1750,6 +1780,13 @@
       setZoomFloor:   function(v) { controller.setZoomFloor(v); },
       setZoomCeiling: function(v) { controller.setZoomCeiling(v); },
       setPanLocked:   function(b) { controller.setPanLocked(b); },
+      // Rotation controls — documented on <Fresco.viewer>'s
+      // :initial_rotation attr since 0.5.7 but only ever exposed on the
+      // canvas handle; the engine has supported them all along (the
+      // built-in rotate nav button calls the same controller methods).
+      setRotation:    function(deg) { controller.setRotation(deg); },
+      getRotation:    function() { return controller.getRotation(); },
+      rotateBy:       function(delta) { controller.rotateBy(delta); },
       on: bus.on,
       _emit: bus._emit,
       appendNavButton: function(svg, title, onClick) {
@@ -1773,6 +1810,7 @@
       var handle = makeViewerHandle(controller);
       this.handle = handle;
       publishReady(this.el.id, handle);
+      this._rotateOff = wireRotationBridge(this);
     },
 
     updated: function() {
@@ -1784,6 +1822,7 @@
     },
 
     destroyed: function() {
+      if (this._rotateOff) { try { this._rotateOff(); } catch (_) {} this._rotateOff = null; }
       if (this.el && this.el.id) unpublish(this.el.id);
       if (this.controller) {
         try { this.controller.teardown(); } catch (_) {}
@@ -2685,30 +2724,7 @@
       this._layoutRev = this.el.dataset.canvasWidth + "x" + this.el.dataset.canvasHeight + ":" +
                         this.el.querySelectorAll("[data-fresco-canvas-img]").length;
       publishReady(this.el.id, handle);
-      // Opt-in server bridge (`data-persist-rotation="true"`): forward the
-      // client-side `rotate` event to the LiveView/LiveComponent so a host can
-      // persist the user's chosen rotation. This is the only pushEvent in
-      // Fresco and is off by default — consumers who don't opt in pay nothing.
-      // Payload: the canvas element id (which canvas) + the new angle, with
-      // `previous` so a host can diff. Fires on every rotation change,
-      // including the Reset-view button snapping back to home rotation.
-      if (this.el.dataset.persistRotation === "true") {
-        var self = this;
-        this._rotateOff = handle.on("rotate", function(e) {
-          var payload = { id: self.el.id, rotation: e.rotation, previous: e.previous };
-          // Route to the LiveComponent that owns the canvas element (via
-          // `pushEventTo(this.el, …)`) when there is one, else the LiveView.
-          // A bare `pushEvent` always targets the root LiveView, which breaks
-          // when the host handles the event in the component that renders the
-          // canvas (e.g. a media viewer LiveComponent). Mirrors Etcher's
-          // `pushEventTo(this.el, …)` convention.
-          if (self.pushEventTo) {
-            self.pushEventTo(self.el, "fresco:rotate", payload);
-          } else if (self.pushEvent) {
-            self.pushEvent("fresco:rotate", payload);
-          }
-        });
-      }
+      this._rotateOff = wireRotationBridge(this);
     },
 
     updated: function() {
