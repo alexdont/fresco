@@ -4,6 +4,33 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.9.0 — 2026-07-16
+
+### Added
+
+- **`persist_rotation` attr on `<Fresco.viewer>`** — the `"fresco:rotate"`
+  server bridge introduced for the canvas in 0.8.0 now works on the
+  single-image viewer too. Same payload
+  (`%{"id" => el_id, "rotation" => deg, "previous" => prev}`), same
+  routing (`pushEventTo` the owning LiveView/LiveComponent), still off by
+  default. The push logic is one shared helper used by both hooks, with
+  proper unsubscribe on hook teardown.
+- **Rotation methods on the viewer handle.** `handle.setRotation(deg)`,
+  `handle.getRotation()`, and `handle.rotateBy(delta)` have been documented
+  on `<Fresco.viewer>`'s `:initial_rotation` attr since 0.5.7 and the
+  engine has supported them all along (the built-in rotate nav button uses
+  them) — but neither the viewer controller nor the viewer handle ever
+  forwarded them; only the canvas handle did. They're now exposed, so
+  consumers can drive viewer rotation programmatically (and trigger
+  `persist_rotation` pushes) from their own chrome.
+
+### Changed
+
+- **Rotate and Reset-view nav icons are distinguishable.** Both were
+  two-arrow circular loops — near-identical at nav-button size. Rotate 90°
+  is now a single clockwise arrow; Reset view is a house (the "home view"
+  convention from OpenSeadragon and map UIs).
+
 ## 0.8.0 — 2026-07-06
 
 ### Added
