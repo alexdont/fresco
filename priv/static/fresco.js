@@ -178,7 +178,12 @@
     // clockwise 90° per click; the icon's CW arrow matches.
     // Single clockwise arrow — one loop, one arrowhead. The old glyph was a
     // two-arrow cycle that read the same as the old reset icon.
-    rotate:  '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path stroke-linecap="round" stroke-linejoin="round" d="M21 3v5h-5"/></svg>'
+    rotate:  '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path stroke-linecap="round" stroke-linejoin="round" d="M21 3v5h-5"/></svg>',
+    // Counter-clockwise twin of `rotate` — the same single-arrow glyph
+    // mirrored on X (matrix(-1 0 0 1 24 0)), so the arrowhead reads top-left
+    // and the loop spins CCW. A guaranteed visual mirror of the CW button
+    // rather than a hand-drawn second glyph.
+    rotateLeft: '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><g transform="matrix(-1 0 0 1 24 0)"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path stroke-linecap="round" stroke-linejoin="round" d="M21 3v5h-5"/></g></svg>'
   };
 
   // Snap any rotation input to the nearest multiple of 90 and
@@ -573,8 +578,15 @@
     if (enabled("fullscreen")) nav.appendChild(makeButton(ICONS.expand, "Toggle fullscreen", handlers.onFullscreen));
     if (enabled("zoom_in"))    nav.appendChild(makeButton(ICONS.zoomIn,  "Zoom in",  handlers.onZoomIn));
     if (enabled("zoom_out"))   nav.appendChild(makeButton(ICONS.zoomOut, "Zoom out", handlers.onZoomOut));
+    // `rotate` is the original clockwise button (+90); `rotate_left` is the
+    // counter-clockwise twin (-90), rendered just before it so the pair reads
+    // ↺ ↻. Neither is in the default nav_buttons list, so a consumer opts each
+    // in explicitly (or passes no list = all buttons, which shows both).
+    if (enabled("rotate_left") && handlers.onRotateLeft) {
+      nav.appendChild(makeButton(ICONS.rotateLeft, "Rotate left 90°", handlers.onRotateLeft));
+    }
     if (enabled("rotate") && handlers.onRotate) {
-      nav.appendChild(makeButton(ICONS.rotate, "Rotate 90°", handlers.onRotate));
+      nav.appendChild(makeButton(ICONS.rotate, "Rotate right 90°", handlers.onRotate));
     }
     if (enabled("home"))       nav.appendChild(makeButton(ICONS.reset,   "Reset view", handlers.onFit));
     host.appendChild(nav);
@@ -1254,6 +1266,7 @@
         zoomAt(vw / 2, vh / 2, 1 / 1.4);
       },
       onRotate: function() { rotateBy(90); },
+      onRotateLeft: function() { rotateBy(-90); },
       onFullscreen: toggleFullscreen
     }, {
       navButtonEnabled: function(name) { return navButtonEnabled(name); }
@@ -1461,6 +1474,12 @@
       setRotation: setRotation,
       getRotation: getRotation,
       rotateBy: rotateBy,
+      // Named quarter-turn helpers matching the two rotate nav buttons:
+      // right = clockwise (+90), left = counter-clockwise (-90). Both fire
+      // the `rotate` event (persisted when `persist_rotation` is on), so a
+      // host's own buttons rotate and save exactly like the built-in ones.
+      rotateRight: function() { rotateBy(90); },
+      rotateLeft: function() { rotateBy(-90); },
       // Programmatic equivalents of the built-in nav buttons so a
       // consumer hiding the chrome can still wire their own buttons,
       // keyboard shortcuts, or accessibility affordances to the same
@@ -1787,6 +1806,10 @@
       setRotation:    function(deg) { controller.setRotation(deg); },
       getRotation:    function() { return controller.getRotation(); },
       rotateBy:       function(delta) { controller.rotateBy(delta); },
+      // Named quarter-turn helpers (right = +90 CW, left = -90 CCW), the
+      // twins of the two rotate nav buttons. Both persist like the buttons.
+      rotateRight:    function() { controller.rotateBy(90); },
+      rotateLeft:     function() { controller.rotateBy(-90); },
       on: bus.on,
       _emit: bus._emit,
       appendNavButton: function(svg, title, onClick) {
@@ -2686,6 +2709,11 @@
       setRotation:    function(deg) { controller.setRotation(deg); },
       getRotation:    function() { return controller.getRotation(); },
       rotateBy:       function(delta) { controller.rotateBy(delta); },
+      // Named quarter-turn helpers (right = +90 CW, left = -90 CCW), the
+      // twins of the two rotate nav buttons. Both fire the `rotate` event,
+      // so they persist exactly like the buttons when persist_rotation is on.
+      rotateRight:    function() { controller.rotateBy(90); },
+      rotateLeft:     function() { controller.rotateBy(-90); },
       // Programmatic equivalents of the built-in nav buttons —
       // identical step factors + anchors. Consumers hiding the
       // chrome (`:nav_buttons={[]}`) but wanting the same actions

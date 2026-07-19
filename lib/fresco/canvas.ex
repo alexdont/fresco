@@ -664,15 +664,20 @@ defmodule Fresco.Canvas do
     default: nil,
     doc: """
     Allowlist of enabled built-in nav buttons. Atom list:
-    `[:home, :zoom_in, :zoom_out, :rotate, :fullscreen]`.
+    `[:home, :zoom_in, :zoom_out, :rotate, :rotate_left, :fullscreen]`.
 
-    - `nil` (default) — every button enabled.
+    `:rotate` rotates clockwise (+90); `:rotate_left` is its
+    counter-clockwise twin (-90), rendered just before it.
+
+    - `nil` (default) — every button enabled (both rotate directions).
     - `[]` — every button **hidden**. Useful for consumers building
       their own chrome; wire your buttons to
-      `handle.zoomIn()` / `handle.zoomOut()` / `handle.rotateBy(90)` /
-      `handle.toggleFullscreen()` / `handle.requestHome()` to get
-      identical behavior to the built-ins.
-    - A subset list — only those buttons render.
+      `handle.zoomIn()` / `handle.zoomOut()` /
+      `handle.rotateRight()` / `handle.rotateLeft()` (or
+      `handle.rotateBy(±90)`) / `handle.toggleFullscreen()` /
+      `handle.requestHome()` to get identical behavior to the built-ins.
+    - A subset list — only those buttons render (e.g. `[:rotate,
+      :rotate_left]` for just the two rotate controls).
     """
   )
 
@@ -687,10 +692,13 @@ defmodule Fresco.Canvas do
     — no flash of unrotated → rotated.
 
     Runtime control via `handle.setRotation(deg)` /
-    `handle.rotateBy(delta)`; the built-in `:rotate` nav button
-    cycles `+90°` per click. Only the stage rotates — host
-    element, nav overlay, and any consumer overlays outside the
-    stage stay unrotated.
+    `handle.rotateBy(delta)`, or the named quarter-turn helpers
+    `handle.rotateRight()` (+90) / `handle.rotateLeft()` (-90) —
+    the twins of the `:rotate` / `:rotate_left` nav buttons. Every
+    one fires the `rotate` event, so with `persist_rotation` they all
+    save the same way. Only the stage rotates — host element, nav
+    overlay, and any consumer overlays outside the stage stay
+    unrotated.
     """
   )
 

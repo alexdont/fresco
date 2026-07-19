@@ -4,6 +4,29 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.10.0 — 2026-07-19
+
+### Added
+
+- **Rotate the other way.** Rotation was clockwise-only — one `:rotate`
+  nav button (+90) and `handle.rotateBy(90)`. Added a counter-clockwise
+  twin:
+  - **`:rotate_left` nav button** (-90), rendered just before `:rotate`
+    so the pair reads ↺ ↻. Its icon is the `:rotate` glyph mirrored on X,
+    a guaranteed visual mirror. With the default `nav_buttons` (all
+    enabled) both directions show; list them explicitly to pick. The
+    existing `:rotate` button's tooltip is now "Rotate right 90°" (was
+    "Rotate 90°") and the new one is "Rotate left 90°".
+  - **`handle.rotateRight()` / `handle.rotateLeft()`** — named quarter-turn
+    helpers on both the canvas and viewer handles (sugar for
+    `rotateBy(±90)`), so a host driving rotation from its own chrome
+    outside the viewer has a self-documenting call. Both fire the `rotate`
+    event, so with `persist_rotation` they save exactly like the built-in
+    buttons.
+
+  All additive — `rotateBy` already accepted negative deltas; this is the
+  missing button + named API. Existing callers are unaffected.
+
 ## 0.9.0 — 2026-07-16
 
 ### Added
