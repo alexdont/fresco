@@ -44,7 +44,10 @@ OpenSeadragon is lazy-loaded from jsDelivr on first viewer mount — no extra `<
 
 You get:
 
-- **Pan**: click-drag, touch-drag, keyboard arrows
+- **Pan**: click-drag, middle-drag, touch-drag, keyboard arrows. Middle-drag
+  works even where the left button is spoken for — an overlay's drawing tool
+  or marquee selection, or `panLocked` — so there's always a way to move
+  around without switching tools.
 - **Zoom**: mouse wheel, pinch, double-click, dedicated buttons, `+` / `-` keys
 - **Fit-to-view** initial state regardless of image / container aspect ratio
 - **Heroicons nav overlay**: zoom-in / zoom-out / reset / fullscreen

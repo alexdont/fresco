@@ -4,6 +4,32 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.11.0 — 2026-08-05
+
+### Added
+
+- **Middle-drag pans the canvas.** Previously only the left button did, which
+  left no way to move around whenever something else had claimed it — an
+  overlay's drawing tool, a marquee selection, or `panLocked`.
+
+  Two deliberate exemptions make it work in exactly those cases:
+
+  - `panLocked` doesn't block it. The lock exists to free the *left* drag for
+    something else, not to forbid panning — the same reasoning that already
+    lets two-pointer pinch through. A consumer that locks pan at fit-scale is
+    unaffected: `clampPan` leaves nowhere to go at that scale.
+  - `data-fresco-no-capture` doesn't block it either. That attribute is a peer
+    overlay saying "I handle pointer input here", and overlays claim the left
+    button; honouring it for the middle button would mean middle-drag panned
+    over blank canvas but died the moment it started on top of an annotation.
+    An overlay that does want the middle button can still take it with
+    `stopPropagation` — the listener is on the container, in the bubble phase.
+
+  `.fresco-nav` still blocks, since middle-dragging off a zoom button should
+  do nothing. A middle click never emits `tap`, and the browser's own
+  middle-click behaviours (autoscroll, X11 paste, open-in-new-tab) are
+  suppressed over the viewer.
+
 ## 0.10.0 — 2026-07-19
 
 ### Added

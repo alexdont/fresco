@@ -161,6 +161,9 @@
     });
   }
 
+  // `MouseEvent.button` for the middle button / scroll-wheel click.
+  var MIDDLE_BUTTON = 1;
+
   // ===========================================================================
   // Heroicons (outline, 24×24, stroke="currentColor")
   // ===========================================================================
@@ -713,6 +716,9 @@
     var customSMin = (typeof initialZoomFloor === "number") ? initialZoomFloor : null;
     var customSMax = (typeof initialZoomCeiling === "number") ? initialZoomCeiling : null;
     var panLocked = initialPanLocked;
+    // Which mouse button started the current drag (0 = left, 1 = middle).
+    // Reset when the last pointer lifts. Non-mouse pointers report 0.
+    var panButton = 0;
     var customPanBounds = null;      // {x, y, width, height} / null
     var customHome = null;           // function / null
     // Deadline (ms since epoch) until which the next `tap` event
@@ -996,6 +1002,24 @@
       );
     }
 
+    // Same question for a middle-button press, which only `.fresco-nav`
+    // blocks.
+    //
+    // `data-fresco-no-capture` is a peer overlay saying "I handle pointer
+    // input in here" — and overlays claim the LEFT button: drawing, handles,
+    // selection. None of them has a use for the middle button, so honouring
+    // the opt-out for it would mean middle-drag panned over blank canvas but
+    // died the moment it began on top of an annotation, which reads as the
+    // gesture being broken. An overlay that does want the middle button can
+    // still take it by calling `stopPropagation` — this listener is on the
+    // container, in the bubble phase.
+    //
+    // `.fresco-nav` is Fresco's own chrome and keeps blocking: middle-
+    // dragging off a zoom button should do nothing.
+    function blocksMiddleDrag(e) {
+      return e.target && e.target.closest && e.target.closest(".fresco-nav");
+    }
+
     function snapshotGesture() {
       var rect = viewportRect();
       var pts = Array.from(pointers.values());
@@ -1032,10 +1056,19 @@
     }
 
     function onPointerDown(e) {
-      if (e.pointerType === "mouse" && e.button !== 0) return;
-      if (isFromNav(e)) return;
+      // Left drags and middle drags both pan. Middle-drag exists so the
+      // canvas can be panned without giving up whatever the left button is
+      // currently for — an overlay that has taken it for drawing or for a
+      // marquee selection leaves the user no way to move around otherwise.
+      var isMouse = e.pointerType === "mouse";
+      if (isMouse && e.button !== 0 && e.button !== MIDDLE_BUTTON) return;
+      var middle = isMouse && e.button === MIDDLE_BUTTON;
+      if (middle ? blocksMiddleDrag(e) : isFromNav(e)) return;
       cancelAnimation();
+      // Also stops the browser's middle-click autoscroll from kicking in
+      // and fighting the drag.
       e.preventDefault();
+      panButton = isMouse ? e.button : 0;
       try { el.setPointerCapture(e.pointerId); } catch (_) {}
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       el.classList.add("fresco--dragging");
@@ -1064,7 +1097,13 @@
         // panLocked suppresses single-pointer drag entirely. Two-pointer
         // pinch (handled below) still works for zoom. setZoomFloor /
         // setZoomCeiling are honored implicitly via zoomAt's clamp.
-        if (panLocked) return;
+        //
+        // A middle drag is exempt, for the same reason pinch is: the lock
+        // exists to free the LEFT drag for something else (a marquee
+        // select, a drawing tool), not to forbid panning outright. A
+        // consumer that locks pan at fit-scale is unaffected either way —
+        // `clampPan` leaves nowhere to go at that scale.
+        if (panLocked && panButton !== MIDDLE_BUTTON) return;
         if (!gestureEnabled("pan")) return;
         var dx = e.clientX - gestureStart.x;
         var dy = e.clientY - gestureStart.y;
@@ -1106,8 +1145,11 @@
       // 5px movement threshold throughout. Touch and pen taps also
       // qualify — useful for swipe-paged readers that need tap-to-turn
       // semantics without re-rolling drag-vs-tap detection.
+      // A middle click is never a tap. Consumers wire `tap` to content
+      // actions (page turns, opening a link), and a stray middle press
+      // that happened not to travel far enough shouldn't trigger those.
       var tapCandidate = (
-        pointers.size === 1 &&
+        pointers.size === 1 && panButton !== MIDDLE_BUTTON &&
         gestureStart && gestureStart.kind === "pan" && !gestureStart.moved
       ) ? gestureStart : null;
 
@@ -1118,6 +1160,7 @@
         return;
       }
       gestureStart = null;
+      panButton = 0;
       el.classList.remove("fresco--dragging");
 
       if (tapCandidate && e.type !== "pointercancel") {
@@ -1245,6 +1288,12 @@
 
     // ── Listeners + nav + resize ───────────────────────────────────────────
     el.addEventListener("pointerdown", onPointerDown);
+    // Middle-click's own defaults, which would otherwise land at the end of
+    // a middle drag: paste-on-primary-selection under X11, and open-in-new-
+    // tab if the drag happens to finish over a link in an overlay.
+    el.addEventListener("auxclick", function(e) {
+      if (e.button === MIDDLE_BUTTON && !blocksMiddleDrag(e)) e.preventDefault();
+    });
     el.addEventListener("pointermove", onPointerMove);
     el.addEventListener("pointerup", onPointerUp);
     el.addEventListener("pointercancel", onPointerUp);
