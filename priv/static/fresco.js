@@ -271,6 +271,10 @@
       "  outline: none;",
       "}",
       ".fresco-viewer.fresco--dragging { cursor: grabbing; }",
+      // The dot grid is a reading aid, not part of anyone's drawing. Some
+      // boards want a plain surface — a photo to annotate, a presentation —
+      // and the dots read as noise over the top of those.
+      ".fresco-viewer.fresco--no-grid { background-image: none; }",
       // Stage: transformed surface holding the image(s). `transform-origin: 0 0`
       // pairs with the engine's (tx, ty, s) math. `will-change: transform` +
       // `backface-visibility: hidden` keep the layer permanently composited.
@@ -689,6 +693,9 @@
     // Image-pixel math (imageToScreen / screenToImage / fit / clamp)
     // applies the rotation analytically — see `rotationCosSin`.
     var rot = normalizeRotation(initialRotation || 0);
+    // The dot grid, on unless someone turns it off. Held here rather than
+    // read back off the class each time so the answer survives a re-render.
+    var gridVisible = true;
     // The rotation "reset view" returns to — the mount-time rotation, so
     // `resetView()` (Reset-view button + "0" key) undoes the +90° rotate
     // clicks without discarding a consumer's persisted `initial_rotation`.
@@ -1436,6 +1443,16 @@
     // should re-fit the current page after rotating, not the whole
     // multi-image canvas. Consumers without a customHome get the
     // engine's default fit (`fit()`).
+    // The background dot grid. Purely visual — nothing about the transform,
+    // the content or what anyone else sees changes with it.
+    function setGridVisible(on) {
+      gridVisible = on !== false;
+      if (el && el.classList) el.classList.toggle("fresco--no-grid", !gridVisible);
+      bus._emit("grid", { visible: gridVisible });
+    }
+
+    function getGridVisible() { return gridVisible; }
+
     function setRotation(deg) {
       var next = normalizeRotation(deg);
       if (next === rot) return;
@@ -1520,6 +1537,8 @@
       setPanBounds: setPanBounds,
       setHomeAction: setHomeAction,
       suppressNextTap: suppressNextTap,
+      setGridVisible: setGridVisible,
+      getGridVisible: getGridVisible,
       setRotation: setRotation,
       getRotation: getRotation,
       rotateBy: rotateBy,
@@ -1852,6 +1871,8 @@
       // :initial_rotation attr since 0.5.7 but only ever exposed on the
       // canvas handle; the engine has supported them all along (the
       // built-in rotate nav button calls the same controller methods).
+      setGridVisible: function(on) { controller.setGridVisible(on); },
+      getGridVisible: function() { return controller.getGridVisible(); },
       setRotation:    function(deg) { controller.setRotation(deg); },
       getRotation:    function() { return controller.getRotation(); },
       rotateBy:       function(delta) { controller.rotateBy(delta); },
@@ -2564,6 +2585,8 @@
       setRotation: engine.setRotation,
       getRotation: engine.getRotation,
       rotateBy: engine.rotateBy,
+      setGridVisible: engine.setGridVisible,
+      getGridVisible: engine.getGridVisible,
       // 0.5.7+ programmatic nav-button equivalents. Same leak
       // pattern — the engine has them, the handle proxies through,
       // the controller layer in between had to re-export.
@@ -2755,6 +2778,8 @@
       // — wire it to a toggle button. The host element + nav
       // overlay stay un-rotated; only the stage (and everything
       // inside it, including extension SVG overlays) rotates.
+      setGridVisible: function(on) { controller.setGridVisible(on); },
+      getGridVisible: function() { return controller.getGridVisible(); },
       setRotation:    function(deg) { controller.setRotation(deg); },
       getRotation:    function() { return controller.getRotation(); },
       rotateBy:       function(delta) { controller.rotateBy(delta); },
