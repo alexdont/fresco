@@ -1228,7 +1228,20 @@
       }
     }
 
-    function onDragStart(e) { e.preventDefault(); }
+    // Cancels the browser's native drag so panning across an image doesn't
+    // start dragging the image itself — the ghost thumbnail follows the
+    // cursor and the pan dies under it.
+    //
+    // Overlays are exempt, on the same opt-out as every other gesture here.
+    // Without that, nothing layered on the canvas can use drag-and-drop at
+    // all: a reorderable list inside an overlay gets as far as the pointer
+    // going down and then never moves, because `dragstart` is cancelled
+    // before the browser can begin. The opt-out exists to say "I handle
+    // pointer input in here", and this is pointer input.
+    function onDragStart(e) {
+      if (isFromNav(e)) return;
+      e.preventDefault();
+    }
 
     function onWheel(e) {
       if (isFromNav(e)) return;
