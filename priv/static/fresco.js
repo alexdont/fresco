@@ -1548,6 +1548,12 @@
       setZoomCeiling: setZoomCeiling,
       setPanLocked: setPanLocked,
       setPanBounds: setPanBounds,
+      // Whether this engine runs without the default pan clamp. Peer
+      // libraries that manage pan bounds around out-of-canvas content
+      // (Etcher) must know: on an infinite canvas there is no clamp to
+      // loosen, and setting bounds would ADD one where the contract says
+      // none exists.
+      isInfiniteCanvas: function() { return infiniteCanvas; },
       setHomeAction: setHomeAction,
       suppressNextTap: suppressNextTap,
       setGridVisible: setGridVisible,
@@ -2589,6 +2595,7 @@
       setZoomCeiling: engine.setZoomCeiling,
       setPanLocked: engine.setPanLocked,
       setPanBounds: engine.setPanBounds,
+      isInfiniteCanvas: engine.isInfiniteCanvas,
       setHomeAction: engine.setHomeAction,
       suppressNextTap: engine.suppressNextTap,
       // 0.5.7+ rotation API. Without these re-exports, the canvas
