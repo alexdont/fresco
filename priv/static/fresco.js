@@ -1548,12 +1548,6 @@
       setZoomCeiling: setZoomCeiling,
       setPanLocked: setPanLocked,
       setPanBounds: setPanBounds,
-      // Whether this engine runs without the default pan clamp. Peer
-      // libraries that manage pan bounds around out-of-canvas content
-      // (Etcher) must know: on an infinite canvas there is no clamp to
-      // loosen, and setting bounds would ADD one where the contract says
-      // none exists.
-      isInfiniteCanvas: function() { return infiniteCanvas; },
       setHomeAction: setHomeAction,
       suppressNextTap: suppressNextTap,
       setGridVisible: setGridVisible,
@@ -2595,7 +2589,6 @@
       setZoomCeiling: engine.setZoomCeiling,
       setPanLocked: engine.setPanLocked,
       setPanBounds: engine.setPanBounds,
-      isInfiniteCanvas: engine.isInfiniteCanvas,
       setHomeAction: engine.setHomeAction,
       suppressNextTap: engine.suppressNextTap,
       // 0.5.7+ rotation API. Without these re-exports, the canvas
@@ -2778,6 +2771,13 @@
       // the start but the canvas handle's surface never re-exported
       // them — a leak fixed here.
       setPanBounds:   function(b) { controller.setPanBounds(b); },
+      // Forwarded for the peers that manage pan bounds (Etcher's
+      // outside-the-picture ink): they must know whether a clamp exists
+      // to loosen, and they treat a handle that cannot answer as
+      // untouchable — omitting this silently disabled the feature on
+      // every surface served by THIS handle while the inner handles
+      // worked, the same trap zoomAt fell into once.
+      isInfiniteCanvas: function() { return controller.isInfiniteCanvas(); },
       setHomeAction:  function(fn) { controller.setHomeAction(fn); },
       // Suppress the next `tap` event for `ms` (default 250) —
       // peer libraries committing a gesture that races the OS-
