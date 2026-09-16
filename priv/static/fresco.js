@@ -1545,6 +1545,11 @@
       isReady: function() { return ready; },
       setReady: function(b) { ready = b; },
       setZoomFloor: setZoomFloor,
+      // The consumer-set floor (null = engine default). Peers that lower
+      // the floor temporarily (Etcher, to let a board zoom out to ink
+      // outside the picture) read it first so they can restore the
+      // HOST'S floor, not blindly null it.
+      getZoomFloor: function() { return customSMin; },
       setZoomCeiling: setZoomCeiling,
       setPanLocked: setPanLocked,
       setPanBounds: setPanBounds,
@@ -1760,6 +1765,7 @@
       panBy: engine.panBy,
       setTransform: engine.setTransform,
       setZoomFloor: engine.setZoomFloor,
+      getZoomFloor: engine.getZoomFloor,
       setZoomCeiling: engine.setZoomCeiling,
       setPanLocked: engine.setPanLocked,
       setRotation: engine.setRotation,
@@ -1878,6 +1884,7 @@
       // the engine's setZoomFloor / setZoomCeiling / setPanLocked
       // docstrings for semantics.
       setZoomFloor:   function(v) { controller.setZoomFloor(v); },
+      getZoomFloor:   function() { return controller.getZoomFloor(); },
       setZoomCeiling: function(v) { controller.setZoomCeiling(v); },
       setPanLocked:   function(b) { controller.setPanLocked(b); },
       // Rotation controls — documented on <Fresco.viewer>'s
@@ -2586,6 +2593,7 @@
       panBy: engine.panBy,
       setTransform: engine.setTransform,
       setZoomFloor: engine.setZoomFloor,
+      getZoomFloor: engine.getZoomFloor,
       setZoomCeiling: engine.setZoomCeiling,
       setPanLocked: engine.setPanLocked,
       setPanBounds: engine.setPanBounds,
@@ -2760,6 +2768,7 @@
       // three default to no-op so consumers who don't opt in see
       // identical pre-0.5.1 behavior.
       setZoomFloor:   function(v) { controller.setZoomFloor(v); },
+      getZoomFloor:   function() { return controller.getZoomFloor(); },
       setZoomCeiling: function(v) { controller.setZoomCeiling(v); },
       setPanLocked:   function(b) { controller.setPanLocked(b); },
       // Per-region pan clamp + custom home action (both 0.5.2+).
