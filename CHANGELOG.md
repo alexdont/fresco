@@ -4,6 +4,53 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.12.0 — 2026-09-16
+
+The release that lets a peer overlay manage the canvas around its own
+content: enough of the engine's clamp state is now readable and writable
+through every handle layer for an annotation library to fence — and
+unfence — a board correctly.
+
+### Added
+
+- **`isInfiniteCanvas()` on every handle layer** — engine, both
+  controllers, both outer handles. Peer libraries that manage pan bounds
+  around out-of-canvas content (Etcher lets annotations spill past the
+  picture and loosens the clamp to reach them) need to know whether this
+  engine clamps at all: on an infinite canvas there is no clamp to
+  loosen, and `setPanBounds` there would ADD one — fencing a free board
+  the moment a shape strayed. The outer canvas handle — the one
+  canvas-board surfaces actually hand to peers — is the layer that
+  matters and the one that was initially missed: a handle that cannot
+  answer is (correctly) treated as untouchable, so the feature silently
+  did nothing on exactly those surfaces. Same trap `zoomAt` fell into
+  once; same lesson.
+
+- **`getZoomFloor()` beside `setZoomFloor()` on every handle layer.**
+  A peer that lowers the floor temporarily (Etcher, letting a board zoom
+  out to ink outside the picture) must restore the HOST'S configured
+  floor afterwards, not blindly null it — which requires being able to
+  read it first.
+
+- **`setGridVisible(on)`** — the background dot grid can be turned off.
+  The dots are a reading aid, not part of anyone's drawing, and they
+  were always on with no way to reach them: over a photo being
+  annotated, or a board being presented from, they read as noise on top
+  of the content. Purely visual — nothing about the transform, the
+  content, or what anyone else sees changes with it.
+
+### Fixed
+
+- **Overlays can use native drag-and-drop.** Fresco cancels `dragstart`
+  across its viewport so panning over an image does not start dragging
+  the image itself — but the cancel had no exemption, so no overlay
+  could use drag-and-drop at all: a reorderable list inside one took its
+  dragging styles on pointerdown and then never moved, reading as the
+  drag library being broken. Overlays now take the same
+  `data-fresco-no-capture` opt-out every other gesture honours — it
+  exists to say "I handle pointer input in here", and this is pointer
+  input. The viewport and the stage still cancel.
+
 ## 0.11.0 — 2026-08-05
 
 ### Added
