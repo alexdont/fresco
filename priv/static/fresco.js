@@ -830,15 +830,24 @@
       }
       var bw = bbox.maxX - bbox.minX;
       var bh = bbox.maxY - bbox.minY;
+      // Too small to pan in an axis? Then the position is fixed, and what
+      // gets centred is the CONTENT — never a custom rect. A consumer sets
+      // bounds to say how far the view may travel (Etcher widens them to
+      // reach ink drawn outside the picture); it is not saying the picture
+      // should move. Centring the rect did exactly that: ink spilling off
+      // one side shoved the picture the other way, by half the spill, the
+      // moment the annotations loaded — the image visibly settling
+      // sideways under the viewer.
+      var centre = customPanBounds ? rotatedContentBBox() : bbox;
       if (bw >= vw) {
         tx = clamp(tx, vw - bbox.maxX, -bbox.minX);
       } else {
-        tx = (vw - bw) / 2 - bbox.minX;
+        tx = (vw - (centre.maxX - centre.minX)) / 2 - centre.minX;
       }
       if (bh >= vh) {
         ty = clamp(ty, vh - bbox.maxY, -bbox.minY);
       } else {
-        ty = (vh - bh) / 2 - bbox.minY;
+        ty = (vh - (centre.maxY - centre.minY)) / 2 - centre.minY;
       }
     }
 

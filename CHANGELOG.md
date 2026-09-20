@@ -4,6 +4,24 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.12.1 — 2026-09-20
+
+### Fixed
+
+- **Custom pan bounds no longer move the picture.** In an axis too small
+  to pan, `clampPan` centred whatever rect it was clamping to — which,
+  with `setPanBounds` in play, was the consumer's widened rect rather
+  than the content. A peer that extends the bounds to reach content
+  drawn outside the picture (Etcher does this for ink that spills past
+  the image) therefore shoved the picture sideways by half the spill the
+  moment that content loaded: measured at 80px on a real board, and
+  seen as the image settling sideways just after a viewer opened.
+
+  Bounds say how far the view may TRAVEL, not where the content should
+  sit, so a fixed axis now centres the content and leaves the rect to do
+  its one job. Panning across the spill is unchanged: once an axis is
+  large enough to move, it still clamps to the custom rect.
+
 ## 0.12.0 — 2026-09-16
 
 The release that lets a peer overlay manage the canvas around its own
