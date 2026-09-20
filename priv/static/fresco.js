@@ -224,6 +224,9 @@
   var stylesInjected = false;
   function injectStyles() {
     if (stylesInjected) return;
+    // No head yet (script in <head>, pre-parse) — the load-time call below
+    // retries on DOMContentLoaded, and every hook mount calls this too.
+    if (typeof document === "undefined" || !document.head) return;
     stylesInjected = true;
 
     var css = [
@@ -308,7 +311,14 @@
       // set). Toggling visibility via this class keeps the layout stable
       // (img still participates in stage sizing) while keeping the natural-
       // size flash invisible.
-      ".fresco-viewer:not(.fresco--ready) .fresco-stage img {",
+      // `[data-fresco-prefit]` is exempt: the server marks an image it has
+      // already painted CSS-contained (Fresco.Canvas.image_style/2), which is
+      // a fit — soft, but whole and in proportion. Hiding THAT would blank the
+      // viewer for the whole stretch between this bundle loading and the hook
+      // mounting, which on a slow connection is seconds. The engine strips the
+      // attribute as it takes over, in the same tick that adds
+      // `fresco--ready`, so there is no window where raw sizes show.
+      ".fresco-viewer:not(.fresco--ready) .fresco-stage img:not([data-fresco-prefit]) {",
       "  visibility: hidden;",
       "}",
       // System mode: follow OS preference. Excluded for explicit light or inherit.
@@ -350,6 +360,29 @@
     style.setAttribute("data-fresco", "");
     style.textContent = css;
     document.head.appendChild(style);
+  }
+
+  // The stylesheet must exist before the FIRST PAINT, not at hook mount.
+  // `.fresco-viewer:not(.fresco--ready) .fresco-stage img` is what keeps the
+  // server-rendered <img> — sized in CANVAS pixels, untransformed because the
+  // engine has not run — off the screen until the first fit. Injecting it in
+  // `mounted()` meant that rule did not exist for the whole gap between the
+  // static render and the LiveView hook mounting, and a page that loads with
+  // the viewer already on screen (deep link, refresh) painted the raw image
+  // for that entire gap: Tailwind preflight's `img { max-width: 100% }`
+  // clamps the inline width to the column while the inline height stays at
+  // canvas px, so it showed up hugely magnified AND at the wrong aspect
+  // ratio. Measured at over a second on a cold load; the bundle parses far
+  // earlier than any hook mounts.
+  //
+  // Injecting from the bundle also keeps the fallback honest: if the script
+  // never loads, the hiding rule never exists either, and the server markup
+  // stays visible.
+  if (typeof document !== "undefined") {
+    if (document.head) injectStyles();
+    else if (document.addEventListener) {
+      document.addEventListener("DOMContentLoaded", injectStyles, { once: true });
+    }
   }
 
   function makeButton(svg, title, onClick) {
@@ -1986,8 +2019,19 @@
     function applyImgResets(im) {
       im.style.maxWidth = "none";
       im.style.maxHeight = "none";
+      // Clear the server's pre-fit hints (Fresco.Canvas.image_style/2): the
+      // markup paints a CSS-contained preview for the gap before this engine
+      // exists, and `object-fit` is the one declaration the per-frame math
+      // below does not overwrite.
+      im.style.objectFit = "";
+      im.removeAttribute("data-fresco-prefit");
     }
     imgs.forEach(applyImgResets);
+    // Same for the stage: the preview sizes it to the viewer so the images'
+    // percentages have something to resolve against. The engine only ever
+    // transforms the stage, so its box goes back to shrink-wrapping content.
+    stage.style.width = "";
+    stage.style.height = "";
 
     // Set of image ids the consumer has explicitly hidden via
     // setImageVisible(id, false). Hidden imgs are still in `imgs` and

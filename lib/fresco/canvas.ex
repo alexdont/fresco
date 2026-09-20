@@ -808,6 +808,7 @@ defmodule Fresco.Canvas do
       |> assign(:sorted_images, sorted_images)
       |> assign(:extensions_json, Jason.encode!(canvas_struct.extensions))
       |> assign(:bg_style, background_style(canvas_struct.canvas))
+      |> assign(:prefit?, prefit?(canvas_struct.canvas, sorted_images))
       |> assign(:initial_fit_bounds_json, encode_initial_bounds(assigns[:initial_fit_bounds]))
       |> assign(:gestures_csv, atoms_to_csv(assigns[:gestures]))
       |> assign(:nav_buttons_csv, atoms_to_csv(assigns[:nav_buttons]))
@@ -843,7 +844,7 @@ defmodule Fresco.Canvas do
       tabindex="0"
       {@rest}
     >
-      <div class="fresco-stage" data-fresco-stage style={@bg_style}>
+      <div class="fresco-stage" data-fresco-stage style={stage_style(@bg_style, @prefit?)}>
         <%= for img <- @sorted_images do %>
           <img
             src={img.src}
@@ -854,7 +855,8 @@ defmodule Fresco.Canvas do
             data-canvas-width={img.width}
             data-canvas-height={canvas_image_height(img)}
             data-z-index={Map.get(img, :z_index, 0)}
-            style={image_style(img)}
+            data-fresco-prefit={@prefit? && "true"}
+            style={image_style(img, @prefit?)}
             draggable="false"
             alt=""
           />
@@ -904,14 +906,74 @@ defmodule Fresco.Canvas do
 
     cond do
       is_number(nw) and is_number(nh) and nw > 0 ->
-        "#{w * nh / nw}"
+        w * nh / nw
 
       true ->
         nil
     end
   end
 
-  defp image_style(img) do
+  # The pre-fit paint. The server cannot know the viewport, so it cannot
+  # compute the fit the engine will apply — but it CAN paint something that
+  # looks like a fit, using CSS alone, for the gap between the static render
+  # and the hook mounting. That gap is not small: the JS bundle is fetched and
+  # parsed after the HTML paints, and on a cold load it can run a second or
+  # more behind. A page that opens with a viewer already on screen (deep link,
+  # refresh) shows whatever this markup says for that whole time.
+  #
+  # What it used to say was the canvas-pixel box — `width:4984px;
+  # height:2957px` for a 5K photo. Untransformed, that is the top-left corner
+  # of a hugely magnified picture; and under a CSS reset that clamps width but
+  # not height (Tailwind preflight's `img { max-width: 100% }`) it is also
+  # squashed to the wrong aspect ratio. Reported as "a very strange stretched
+  # image" on refresh.
+  #
+  # Contained against the viewer box instead, the first paint is the picture,
+  # whole and in proportion — soft, because the rung on hand is small, which
+  # reads as loading rather than as broken. The engine overwrites left/top/
+  # width/height/max-* on mount and clears these hints (`object-fit` here, the
+  # stage's size below) in `applyImgResets`, so nothing survives into the real
+  # per-frame math.
+  #
+  # Only for a lone image that IS the canvas. On a multi-image board, "contain
+  # each image in the viewer" would stack them all on top of each other, which
+  # is worse than the magnified corner it replaces; and a single image placed
+  # inside a larger canvas would be painted filling the viewer, then jump when
+  # the engine fits the whole canvas instead. Both keep the canvas-pixel box.
+  defp prefit?(canvas, [img]) do
+    cw = Map.get(canvas, :width)
+    ch = Map.get(canvas, :height)
+    ih = canvas_image_height(img)
+
+    Map.get(img, :x, 0) == 0 and Map.get(img, :y, 0) == 0 and
+      is_number(cw) and cw > 0 and img.width == cw and
+      (is_nil(ih) or (is_number(ch) and abs(ch - ih) <= 1))
+  end
+
+  defp prefit?(_canvas, _images), do: false
+
+  defp stage_style(bg_style, true) do
+    [bg_style, "width:100%; height:100%;"] |> Enum.reject(&is_nil/1) |> Enum.join(" ")
+  end
+
+  defp stage_style(bg_style, _), do: bg_style
+
+  defp image_style(img, true) do
+    base = [
+      "position:absolute;",
+      "left:0; top:0;",
+      "width:100%; height:100%;",
+      "max-width:100%; max-height:100%;",
+      "object-fit:contain;"
+    ]
+
+    case Map.get(img, :z_index) do
+      nil -> Enum.join(base, " ")
+      z -> Enum.join(base ++ ["z-index:#{z};"], " ")
+    end
+  end
+
+  defp image_style(img, _multi) do
     base = [
       "position:absolute;",
       "left:#{img.x}px;",

@@ -234,7 +234,7 @@ defmodule FrescoTest do
       end
     end
 
-    test "natural_width + natural_height set inline height to preserve aspect pre-mount" do
+    test "natural_width + natural_height carry the aspect through to the engine" do
       canvas =
         build_canvas(
           images: [
@@ -245,7 +245,75 @@ defmodule FrescoTest do
       html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas)
       # 1000 * 1500 / 2000 = 750
       assert html =~ ~s(data-canvas-height="750.0")
-      assert html =~ "height:750.0px;"
+    end
+
+    test "a lone image paints CSS-contained before the engine mounts" do
+      # The markup is on screen for the whole gap between the static render
+      # and the hook mounting — a second or more on a cold load, and all of
+      # it if the bundle fails. Canvas-PIXEL sizes there meant a 4000px-wide
+      # photo painted as a magnified corner, and squashed out of proportion
+      # under a reset that clamps width but not height (Tailwind preflight).
+      # Contained against the viewer, that first paint is the whole picture.
+      canvas =
+        build_canvas(
+          images: [
+            %{src: "/a.jpg", x: 0, y: 0, width: 4000, natural_width: 4000, natural_height: 3000}
+          ]
+        )
+
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas)
+
+      assert html =~ "object-fit:contain;", "the pre-mount paint should fit, not crop"
+      assert html =~ "max-width:100%; max-height:100%;", "…and stay inside the viewer"
+
+      refute html =~ "width:4000px;",
+             "canvas-pixel sizing in the markup is the magnified first paint this replaced"
+
+      # Percentages need a box to resolve against; the stage shrink-wraps its
+      # content otherwise. The engine clears this when it takes over.
+      assert html =~ ~s(data-fresco-stage style="width:100%; height:100%;")
+
+      # The bundle's pre-fit hiding rule must not blank this paint: it exists
+      # to suppress raw canvas-pixel sizes, which this image does not have.
+      assert html =~ ~s(data-fresco-prefit="true")
+    end
+
+    test "a lone image smaller than its canvas keeps canvas-pixel sizing" do
+      # The preview fills the viewer; the engine fits the whole CANVAS, which
+      # for an image occupying part of it is a different picture. Painting one
+      # and then jumping to the other is worse than waiting.
+      canvas =
+        build_canvas(
+          images: [
+            %{src: "/a.jpg", x: 0, y: 0, width: 1000, natural_width: 2000, natural_height: 1500}
+          ]
+        )
+
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas)
+
+      assert html =~ "width:1000px;", "canvas is 4000 wide — this image is not the canvas"
+      refute html =~ "object-fit:contain;"
+      refute html =~ "data-fresco-prefit"
+    end
+
+    test "a multi-image board keeps canvas-pixel sizing" do
+      # "Contain each image in the viewer" would stack every image of a board
+      # on top of every other — worse than the magnified corner it fixes.
+      canvas =
+        build_canvas(
+          images: [
+            %{src: "/a.jpg", x: 0, y: 0, width: 1000, natural_width: 2000, natural_height: 1500},
+            %{src: "/b.jpg", x: 1200, y: 0, width: 1000}
+          ]
+        )
+
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas)
+
+      assert html =~ "width:1000px;"
+      assert html =~ "left:1200px;"
+      refute html =~ "object-fit:contain;"
+      refute html =~ ~s(data-fresco-stage style="width:100%)
+      refute html =~ "data-fresco-prefit"
     end
 
     test "z_index plumbs through and sorts render order" do

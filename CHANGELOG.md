@@ -4,6 +4,34 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.12.2 — 2026-09-20
+
+### Fixed
+
+- **A viewer already on screen at page load no longer paints a stretched,
+  magnified image first.** `<Fresco.canvas>` renders each image sized in
+  CANVAS pixels — correct once the engine has run, meaningless before it.
+  The stylesheet that hid those images until the first fit was injected at
+  hook mount, so it did not exist during the gap between the static render
+  and LiveView mounting the hook; the JS bundle is fetched and parsed after
+  the HTML paints, and on a cold load it runs a second or more behind. A
+  deep link or a refresh with the viewer open therefore showed the raw
+  markup for that entire window: the top-left corner of a hugely magnified
+  picture, and — under a CSS reset that clamps width but not height, as
+  Tailwind preflight does — squashed to the wrong aspect ratio as well.
+
+  Two halves to the fix. The stylesheet is now injected when the bundle
+  loads rather than when a hook mounts, so it is in place before the first
+  paint. And the markup itself no longer needs hiding for the common case:
+  a lone image that is the whole canvas is painted CSS-contained against
+  the viewer, which looks like the fit the engine is about to compute —
+  soft, because the variant on hand is small, but whole and in proportion.
+  The engine clears those hints as it takes over.
+
+  Boards are unchanged: containing each image of a multi-image canvas
+  would stack them, so those keep the canvas-pixel box and the hiding
+  rule, which now covers them from first paint.
+
 ## 0.12.1 — 2026-09-20
 
 ### Fixed
