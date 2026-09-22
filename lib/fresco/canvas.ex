@@ -657,6 +657,16 @@ defmodule Fresco.Canvas do
     Useful for kiosks (drop `:keyboard`), swipe-paged readers that handle
     their own page-turn taps (drop `:double_click`), embedded viewers
     that defer scroll to the page (drop `:wheel`).
+
+    `:wheel` covers everything that arrives as a wheel event, which is
+    three gestures on modern hardware: a notch of a mouse wheel zooms,
+    two fingers on a trackpad move the picture, and a pinch zooms (the
+    browser reports it as a wheel with `ctrlKey` set, no key held). The
+    trackpad pan also needs `:pan` — a host that turned panning off means
+    it, whichever device asks — and, like a middle drag and a pinch, it
+    keeps working while `pan_locked` is set, because that lock exists to
+    free the left drag for a marquee or a drawing tool rather than to
+    forbid panning.
     """
   )
 

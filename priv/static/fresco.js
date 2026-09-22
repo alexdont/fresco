@@ -930,6 +930,17 @@
 
     function panBy(dx, dy) {
       if (panLocked) return;
+      panRaw(dx, dy);
+    }
+
+    // The move itself, with no lock consulted. `panLocked` exists to free
+    // the LEFT drag for something else — a marquee, a drawing tool — which
+    // is why a middle drag and a pinch are already exempt from it (see the
+    // pointermove comment). Two fingers on a trackpad are in that same
+    // company: they are not the gesture the lock was taken out on, and a
+    // board you cannot pan while a tool is armed is the state the lock was
+    // supposed to make usable.
+    function panRaw(dx, dy) {
       tx += dx; ty += dy;
       clampPan();
       bus._emit("pan", { tx: tx, ty: ty });
@@ -1285,6 +1296,50 @@
       e.preventDefault();
     }
 
+    // ── Wheel, fingers, pinch: one event, three intentions ───────────────
+    //
+    // A notch of a wheel has meant zoom here since the first version. Two
+    // fingers pushing a trackpad mean move the picture, and a pinch means
+    // zoom — and all three arrive as `wheel`, with nothing in the event
+    // naming the device that sent it.
+    //
+    // So they are told apart by SHAPE. A wheel steps in whole, uniform
+    // notches (100 or 120 px, or whole lines, which is `deltaMode` 1) and
+    // never sideways. Fingers send small deltas, often fractional, with a
+    // sideways component the moment the push is not perfectly straight.
+    //
+    // Both readings are guesses, so the answer is LATCHED for the burst:
+    // one finger-shaped event makes the rest of that flick fingers too.
+    // Without it a pan turns into a zoom halfway through, when momentum
+    // deltas grow past the threshold or land on round numbers — which is
+    // worse than either gesture being wrong outright, because it happens
+    // mid-movement.
+    //
+    // A tilt wheel reads as fingers, and should: sideways on a mouse means
+    // move the picture sideways too. Anyone whose mouse lands on the wrong
+    // side of this can still zoom with ctrl+wheel, the nav buttons, +/-,
+    // or a double-click.
+    var TRACKPAD_STEP_MAX = 40;    // px a finger push stays under early in a flick
+    var TRACKPAD_BURST_MS = 400;   // quiet for this long and the next event is judged afresh
+    var WHEEL_RATE = 0.0015;       // zoom per px of wheel
+    var PINCH_RATE = 0.01;         // zoom per px of pinch
+    var trackpadAt = 0;            // when a finger-shaped event was last seen
+
+    function wheelIsFingers(e) {
+      // Whole lines or pages: a wheel, and one whose delta is not in px.
+      if (e.deltaMode !== 0) return false;
+      var now = Date.now();
+      var fingers =
+        e.deltaX !== 0 ||
+        e.deltaY !== Math.round(e.deltaY) ||
+        (e.deltaY !== 0 && Math.abs(e.deltaY) < TRACKPAD_STEP_MAX);
+      if (fingers) {
+        trackpadAt = now;
+        return true;
+      }
+      return trackpadAt !== 0 && now - trackpadAt < TRACKPAD_BURST_MS;
+    }
+
     function onWheel(e) {
       if (isFromNav(e)) return;
       if (!gestureEnabled("wheel")) return;
@@ -1293,8 +1348,29 @@
       var rect = viewportRect();
       var px = e.clientX - rect.left;
       var py = e.clientY - rect.top;
-      var k = Math.exp(-e.deltaY * 0.0015);
-      zoomAt(px, py, k);
+
+      // A pinch on a trackpad arrives as a wheel with `ctrlKey` set, with
+      // no key held — every browser reports it that way, and it is the
+      // only signal there is. Ctrl+wheel on a mouse is the same gesture by
+      // convention, so both land here. Its deltas are an order of
+      // magnitude smaller than a notch, hence the steeper rate: at the
+      // wheel's own rate a pinch across the whole trackpad barely moves
+      // the picture.
+      if (e.ctrlKey) {
+        if (e.deltaY) zoomAt(px, py, Math.exp(-e.deltaY * PINCH_RATE));
+        return;
+      }
+
+      // Two fingers pushing the picture around. Gated on `pan` as well as
+      // `wheel`: a host that turned panning off means it, whichever device
+      // asks. The sign is the natural one — the picture follows the
+      // fingers, the way it follows a drag.
+      if (wheelIsFingers(e)) {
+        if (gestureEnabled("pan")) panRaw(-e.deltaX, -e.deltaY);
+        return;
+      }
+
+      zoomAt(px, py, Math.exp(-e.deltaY * WHEEL_RATE));
     }
 
     function onDblClick(e) {
