@@ -44,6 +44,11 @@ defmodule Fresco.WheelGesturesTest do
       var log = [];
       #{consts}
       var trackpadAt = 0;
+      // A clock the test drives, so the burst window can be walked across
+      // without waiting for it.
+      var __now = 1000000;   // a real clock is never 0, and the latch's sentinel is
+      var __times = #{Keyword.get(opts, :times, "null")};
+      Date.now = function() { return __now; };
       var panLocked = #{Keyword.get(opts, :pan_locked, false)};
       var gestures = #{Keyword.get(opts, :gestures, "null")};
       function gestureEnabled(name) { return gestures === null || gestures.indexOf(name) !== -1; }
@@ -56,7 +61,7 @@ defmodule Fresco.WheelGesturesTest do
       #{lift(src, "    function wheelIsFingers(e) {")}
       #{lift(src, "    function onWheel(e) {")}
 
-      #{Enum.map_join(events, "\n      ", fn e -> "onWheel(#{e});" end)}
+      #{events |> Enum.with_index() |> Enum.map_join("\n      ", fn {e, i} -> "__now = __times ? 1000000 + __times[#{i}] : __now; onWheel(#{e});" end)}
       console.log(JSON.stringify(log));
     })();
     """
@@ -66,13 +71,17 @@ defmodule Fresco.WheelGesturesTest do
   end
 
   defp evt(fields) do
+    # `wheelDeltaY` defaults to 0, which is what a browser without the
+    # legacy property reports — the reading then falls through to shape.
     defaults = %{
       "deltaX" => 0,
       "deltaY" => 0,
       "deltaMode" => 0,
+      "wheelDeltaY" => 0,
       "clientX" => 100,
       "clientY" => 50,
-      "ctrlKey" => false
+      "ctrlKey" => false,
+      "metaKey" => false
     }
 
     Jason.encode!(Map.merge(defaults, fields) |> Map.put("preventDefault", nil))
@@ -80,6 +89,65 @@ defmodule Fresco.WheelGesturesTest do
   end
 
   describe "a mouse wheel" do
+    test "zooms at full rate when it names itself a notch" do
+      # The one that matters on a Mac, where the system hands a mouse
+      # wheel over as small momentum-shaped deltas that look exactly like
+      # fingers. `wheelDeltaY` is a whole multiple of 120 for a wheel
+      # whatever the px delta, and three times the pixels for fingers.
+      assert [%{"gesture" => "zoom", "k" => k}] =
+               wheel([evt(%{"deltaY" => 4, "wheelDeltaY" => -120})])
+
+      assert_in_delta k, :math.exp(-4 * 0.0015), 1.0e-12
+
+      # …and the same small delta with no such claim is fingers.
+      assert [%{"gesture" => "pan"}] = wheel([evt(%{"deltaY" => 4, "wheelDeltaY" => -12})])
+    end
+
+    test "a long run of notch-shaped events cannot outlast the flick that owns them" do
+      # A finger held down sends events for as long as it moves. If a run
+      # of them happens to land on 120 — a 40px push does — the latch has
+      # to be held by each one, or the burst window lapses under a finger
+      # that never stopped and the pan turns into a zoom mid-movement.
+      log =
+        wheel(
+          [
+            evt(%{"deltaY" => 6, "wheelDeltaY" => -18}),
+            evt(%{"deltaY" => 40, "wheelDeltaY" => -120}),
+            evt(%{"deltaY" => 40, "wheelDeltaY" => -120}),
+            evt(%{"deltaY" => 40, "wheelDeltaY" => -120})
+          ],
+          times: "[0, 300, 600, 900]"
+        )
+
+      assert Enum.map(log, & &1["gesture"]) == ["pan", "pan", "pan", "pan"]
+    end
+
+    test "but a notch after the flick has died is a wheel again" do
+      log =
+        wheel(
+          [
+            evt(%{"deltaY" => 6, "wheelDeltaY" => -18}),
+            evt(%{"deltaY" => 40, "wheelDeltaY" => -120})
+          ],
+          times: "[0, 900]"
+        )
+
+      assert Enum.map(log, & &1["gesture"]) == ["pan", "zoom"]
+    end
+
+    test "a coincidental 120 mid-flick does not interrupt a pan" do
+      # Fingers report 3x their pixels, so a 40px push lands on 120 by
+      # accident. Inside a flick the latch wins; that is what it is for.
+      log =
+        wheel([
+          evt(%{"deltaY" => 6, "wheelDeltaY" => -18}),
+          evt(%{"deltaY" => 40, "wheelDeltaY" => -120}),
+          evt(%{"deltaY" => 52, "wheelDeltaY" => -156})
+        ])
+
+      assert Enum.map(log, & &1["gesture"]) == ["pan", "pan", "pan"]
+    end
+
     test "zooms, as it always has" do
       assert [%{"gesture" => "zoom", "k" => k, "px" => 100, "py" => 50}] =
                wheel([evt(%{"deltaY" => 120})])
@@ -102,6 +170,19 @@ defmodule Fresco.WheelGesturesTest do
     test "move the picture, and it follows them" do
       assert [%{"gesture" => "pan", "dx" => 12, "dy" => -8}] =
                wheel([evt(%{"deltaX" => -12, "deltaY" => 8})])
+    end
+
+    test "grab and drag: the picture goes the way the fingers go" do
+      # With natural scrolling — the default on a laptop trackpad — fingers
+      # pushing down-right report negative deltas on both axes, because the
+      # content is being pulled down-right with them. Negating that is what
+      # makes the picture follow the fingers rather than run away from
+      # them: the gesture reads as grabbing the picture where you touched
+      # it and dragging it there.
+      assert [%{"gesture" => "pan", "dx" => dx, "dy" => dy}] =
+               wheel([evt(%{"deltaX" => -18, "deltaY" => -24})])
+
+      assert dx > 0 and dy > 0, "down-right fingers move the picture down-right"
     end
 
     test "are recognised by a sideways component, a fraction, or a small step" do
@@ -144,6 +225,17 @@ defmodule Fresco.WheelGesturesTest do
 
       assert_in_delta k, :math.exp(10 * 0.01), 1.0e-12
       assert k > :math.exp(10 * 0.0015), "a pinch moves further per px than a wheel notch"
+    end
+
+    test "⌘ held is the same gesture, for a laptop whose fingers are spoken for" do
+      # Two fingers pan now, so on a trackpad the keyboard is the steadier
+      # way to zoom. ⌘+scroll is the one the platform leaves free —
+      # ctrl+scroll is the browser's own page zoom, which is why a pinch
+      # borrows it.
+      assert [%{"gesture" => "zoom", "k" => k}] =
+               wheel([evt(%{"deltaY" => -10, "metaKey" => true})])
+
+      assert_in_delta k, :math.exp(10 * 0.01), 1.0e-12
     end
 
     test "is a zoom even when it looks finger-shaped" do

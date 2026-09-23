@@ -661,7 +661,12 @@ defmodule Fresco.Canvas do
     `:wheel` covers everything that arrives as a wheel event, which is
     three gestures on modern hardware: a notch of a mouse wheel zooms,
     two fingers on a trackpad move the picture, and a pinch zooms (the
-    browser reports it as a wheel with `ctrlKey` set, no key held). The
+    browser reports it as a wheel with `ctrlKey` set, no key held) — as
+    does scrolling with ctrl or ⌘ held, which is the steady way to zoom
+    on a laptop now that two fingers are spoken for. A wheel names itself
+    through the legacy `wheelDeltaY`, a whole multiple of 120 that fingers
+    only hit by coincidence; that is what keeps a Mac mouse, whose deltas
+    are as small and momentum-shaped as a trackpad's, zooming. The
     trackpad pan also needs `:pan` — a host that turned panning off means
     it, whichever device asks — and, like a middle drag and a pinch, it
     keeps working while `pan_locked` is set, because that lock exists to

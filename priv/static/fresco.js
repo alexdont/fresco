@@ -1328,7 +1328,35 @@
     function wheelIsFingers(e) {
       // Whole lines or pages: a wheel, and one whose delta is not in px.
       if (e.deltaMode !== 0) return false;
+
       var now = Date.now();
+      var inBurst = trackpadAt !== 0 && now - trackpadAt < TRACKPAD_BURST_MS;
+
+      // Size alone is not enough, and on a Mac it is barely a clue: the
+      // system hands a MOUSE wheel to the browser as a run of small,
+      // momentum-shaped deltas, exactly like a trackpad's. Read that way,
+      // most of a wheel's notches became pans — invisible at fit scale,
+      // where there is nowhere to pan — and the few that got through left
+      // zooming feeling broken rather than reassigned.
+      //
+      // The legacy `wheelDeltaY` is what tells them apart there. A wheel
+      // reports whole notches, which the engine mirrors as multiples of
+      // 120 whatever the px delta; fingers report three times their pixels
+      // and land on 120 only by coincidence — which is why this is trusted
+      // only OUTSIDE a flick, where one coincidental event cannot turn a
+      // pan into a zoom mid-movement. Browsers that do not carry the
+      // property at all (it is legacy, and Firefox has never had it) say
+      // nothing here and fall through to shape, as before.
+      var legacy = typeof e.wheelDeltaY === "number" ? e.wheelDeltaY
+                 : (typeof e.wheelDelta === "number" ? e.wheelDelta : 0);
+      if (legacy !== 0 && Math.abs(legacy) % 120 === 0 && e.deltaX === 0) {
+        if (!inBurst) return false;
+        // Mid-flick: the latch wins, and keeps its hold — a run of these
+        // would otherwise let the burst lapse under a finger still moving.
+        trackpadAt = now;
+        return true;
+      }
+
       var fingers =
         e.deltaX !== 0 ||
         e.deltaY !== Math.round(e.deltaY) ||
@@ -1337,7 +1365,7 @@
         trackpadAt = now;
         return true;
       }
-      return trackpadAt !== 0 && now - trackpadAt < TRACKPAD_BURST_MS;
+      return inBurst;
     }
 
     function onWheel(e) {
@@ -1352,11 +1380,13 @@
       // A pinch on a trackpad arrives as a wheel with `ctrlKey` set, with
       // no key held — every browser reports it that way, and it is the
       // only signal there is. Ctrl+wheel on a mouse is the same gesture by
-      // convention, so both land here. Its deltas are an order of
+      // convention, so both land here, and so does ⌘+wheel: on a laptop
+      // two fingers are spoken for by the pan now, and holding a key is a
+      // steadier way to zoom than pinching. Its deltas are an order of
       // magnitude smaller than a notch, hence the steeper rate: at the
       // wheel's own rate a pinch across the whole trackpad barely moves
       // the picture.
-      if (e.ctrlKey) {
+      if (e.ctrlKey || e.metaKey) {
         if (e.deltaY) zoomAt(px, py, Math.exp(-e.deltaY * PINCH_RATE));
         return;
       }
