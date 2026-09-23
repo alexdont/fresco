@@ -1413,53 +1413,6 @@
       return fingers;
     }
 
-    // ── Temporary: what the wheel actually sent, and what it did ─────────
-    //
-    // A Mac mouse and a trackpad send nearly the same stream, and the
-    // reading above has to guess which is which. This records the guess
-    // next to the numbers it was made from, and posts each burst to the
-    // server as a path the request log keeps — so a device that reads
-    // wrong can be named from the log instead of guessed at again.
-    //
-    // Off unless the page was opened with `?wheeldebug=1`. Remove once the
-    // reading is settled.
-    var wheelDebugOn = false;
-    try { wheelDebugOn = /[?&]wheeldebug=1/.test(window.location.search); } catch (_) {}
-    var wheelLog = [];
-    var wheelLogTimer = null;
-
-    function wheelDebugNum(v) {
-      return String(Math.round(v * 100) / 100).replace("-", "n").replace(".", "d");
-    }
-
-    function wheelDebugFlush() {
-      wheelLogTimer = null;
-      if (!wheelLog.length) return;
-      var body = wheelLog.slice(0, 10).map(function(r) {
-        return [wheelDebugNum(r.dx), wheelDebugNum(r.dy), r.mode,
-                wheelDebugNum(r.legacy), r.keys, r.kind,
-                wheelDebugNum(r.s0), wheelDebugNum(r.s1)].join(":");
-      }).join(",");
-      var n = wheelLog.length;
-      wheelLog = [];
-      try {
-        new Image().src = "/frescowheel/n" + n + "/" + body + "?t=" + Date.now();
-      } catch (_) {}
-    }
-
-    function wheelDebug(e, kind, s0) {
-      if (!wheelDebugOn) return;
-      var legacy = typeof e.wheelDeltaY === "number" ? e.wheelDeltaY
-                 : (typeof e.wheelDelta === "number" ? e.wheelDelta : 0);
-      wheelLog.push({
-        dx: e.deltaX, dy: e.deltaY, mode: e.deltaMode, legacy: legacy, kind: kind,
-        keys: (e.ctrlKey ? "c" : "") + (e.metaKey ? "m" : "") + (e.shiftKey ? "s" : "") || "-",
-        s0: s0, s1: s
-      });
-      if (wheelLogTimer) clearTimeout(wheelLogTimer);
-      wheelLogTimer = setTimeout(wheelDebugFlush, 700);
-    }
-
     function onWheel(e) {
       if (isFromNav(e)) return;
       if (!gestureEnabled("wheel")) return;
@@ -1484,13 +1437,10 @@
         // for both makes one of them useless — a pinch you have to repeat
         // a dozen times to cross a zoom level, or a wheel that jumps two
         // per click. So each keeps its own.
-        var s0Pinch = s;
-        var pinchFingers = wheelIsFingers(e);
         var pinchPx = wheelPxY(e);
         if (pinchPx) {
-          zoomAt(px, py, Math.exp(-pinchPx * (pinchFingers ? PINCH_RATE : WHEEL_RATE)));
+          zoomAt(px, py, Math.exp(-pinchPx * (wheelIsFingers(e) ? PINCH_RATE : WHEEL_RATE)));
         }
-        wheelDebug(e, pinchFingers ? "pinch" : "modwheel", s0Pinch);
         return;
       }
 
@@ -1505,15 +1455,12 @@
       // read as backwards to everyone who tried it, because a trackpad
       // that scrolls naturally has already done that inversion once, and
       // doing it twice lands back where a page would never be.
-      var s0 = s;
       if (wheelIsFingers(e)) {
         if (gestureEnabled("pan")) panRaw(wheelPxX(e), wheelPxY(e));
-        wheelDebug(e, "fingers", s0);
         return;
       }
 
       zoomAt(px, py, Math.exp(-wheelPxY(e) * WHEEL_RATE));
-      wheelDebug(e, "wheel", s0);
     }
 
     function onDblClick(e) {

@@ -53,9 +53,6 @@ defmodule Fresco.WheelGesturesTest do
       #{consts}
       var trackpadAt = 0;
       var burstKind = null;
-      // The engine's live scale, and the temporary recorder that reads it.
-      var s = 1;
-      function wheelDebug() {}
       var LINE_PX = 40;
       var PAGE_PX = 800;
       // A clock the test drives, so the burst window can be walked across

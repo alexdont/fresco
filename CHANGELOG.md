@@ -4,6 +4,59 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.13.0 — 2026-09-23
+
+A wheel event can mean three different things on modern hardware, and
+this release reads all three: a notch of a mouse wheel zooms, two fingers
+on a trackpad move the view, and a pinch zooms.
+
+### Added
+
+- **Two-finger pan on a trackpad.** Fingers move the view over the
+  picture, the way two fingers move a page — the picture answers by going
+  the other way. It is exempt from `pan_locked`, like a middle drag and a
+  pinch already were: that lock exists to free the LEFT drag for a marquee
+  or a drawing tool (Etcher takes it out for exactly that), not to forbid
+  panning, and a board you cannot move while a tool is armed is the state
+  the lock was supposed to make usable. Needs `:pan` as well as `:wheel`
+  in the gesture allowlist — a host that turned panning off means it,
+  whichever device asks.
+
+- **Pinch-to-zoom, at a gain fingers can cross a zoom level with.** A
+  pinch reaches the page as a wheel with `ctrlKey` set, with no key held;
+  every browser reports it that way. Its deltas are two orders of
+  magnitude smaller than a notch, so it keeps a rate of its own — at the
+  wheel's, a spread across the whole trackpad barely moved the picture.
+  **⌘+scroll and ctrl+scroll zoom too**, which is the steadier way on a
+  laptop now that two fingers are spoken for.
+
+### Fixed
+
+- **A wheel that counts in LINES zooms and pans like one that counts in
+  pixels.** Every rate here is priced per pixel, and `deltaMode: 1`
+  hardware — plenty of mice, and Firefox — sends 6 for the notch that
+  pixel-reporting hardware sends 120 for. That notch bought 0.9% of zoom
+  where it should buy 20%, and moved the picture six pixels when it
+  panned: a viewer that would not zoom and could not be scrolled
+  anywhere. Deltas are converted before use — through the legacy
+  `wheelDelta` (the browser's own 120-a-notch currency) where it is
+  present and plausible, at 40px a line where it is not, 800 a page.
+
+### How a wheel and fingers are told apart
+
+Nothing in the event names the device, so the reading goes by shape: a
+wheel steps in whole, uniform notches and never sideways, fingers send
+small and often fractional deltas with a sideways component. Two rules
+keep that honest. A notch names itself through `wheelDeltaY`, a whole
+multiple of 120 that fingers hit only by coincidence — which matters most
+on a Mac, where the system smooths a mouse wheel into a run of deltas
+shaped exactly like fingers. And a burst belongs to whoever claimed it:
+the first event of a flick decides and the rest inherit, so a gesture
+never changes meaning halfway through, in either direction.
+
+A mouse that lands on the wrong side of the reading can still zoom with
+ctrl+wheel or ⌘+wheel, the nav buttons, `+`/`-`, or a double-click.
+
 ## 0.12.2 — 2026-09-20
 
 ### Fixed
