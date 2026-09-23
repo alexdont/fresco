@@ -1321,6 +1321,7 @@
     // or a double-click.
     var TRACKPAD_STEP_MAX = 40;    // px a finger push stays under early in a flick
     var TRACKPAD_BURST_MS = 400;   // quiet for this long and the next event is judged afresh
+    var burstKind = null;          // "fingers" | "wheel" — who owns the flick in progress
     var WHEEL_RATE = 0.0015;       // zoom per px of wheel
     // Zoom per px of pinch. Fingers move a picture a few px at a time, so
     // this is the dial that decides whether a pinch crosses a zoom level
@@ -1334,7 +1335,19 @@
       if (e.deltaMode !== 0) return false;
 
       var now = Date.now();
-      var inBurst = trackpadAt !== 0 && now - trackpadAt < TRACKPAD_BURST_MS;
+
+      // A burst belongs to whoever claimed it, either way round. One
+      // notch of a mouse does not arrive as one event on a Mac: the
+      // system smooths it into a run of small deltas that are shaped like
+      // fingers, and only the first of them carries the notch. Judging
+      // each event on its own meant the first zoomed and the rest panned
+      // — a notch worth of scrolling buying a couple of percent of zoom,
+      // which is what "the wheel got slow" was. Whichever device speaks
+      // first holds the flick until it ends.
+      if (burstKind !== null && now - trackpadAt < TRACKPAD_BURST_MS) {
+        trackpadAt = now;
+        return burstKind === "fingers";
+      }
 
       // Size alone is not enough, and on a Mac it is barely a clue: the
       // system hands a MOUSE wheel to the browser as a run of small,
@@ -1353,23 +1366,16 @@
       // nothing here and fall through to shape, as before.
       var legacy = typeof e.wheelDeltaY === "number" ? e.wheelDeltaY
                  : (typeof e.wheelDelta === "number" ? e.wheelDelta : 0);
-      if (legacy !== 0 && Math.abs(legacy) % 120 === 0 && e.deltaX === 0) {
-        if (!inBurst) return false;
-        // Mid-flick: the latch wins, and keeps its hold — a run of these
-        // would otherwise let the burst lapse under a finger still moving.
-        trackpadAt = now;
-        return true;
-      }
+      var notch = legacy !== 0 && Math.abs(legacy) % 120 === 0 && e.deltaX === 0;
 
-      var fingers =
-        e.deltaX !== 0 ||
-        e.deltaY !== Math.round(e.deltaY) ||
-        (e.deltaY !== 0 && Math.abs(e.deltaY) < TRACKPAD_STEP_MAX);
-      if (fingers) {
-        trackpadAt = now;
-        return true;
-      }
-      return inBurst;
+      var fingers = !notch &&
+        (e.deltaX !== 0 ||
+         e.deltaY !== Math.round(e.deltaY) ||
+         (e.deltaY !== 0 && Math.abs(e.deltaY) < TRACKPAD_STEP_MAX));
+
+      burstKind = fingers ? "fingers" : "wheel";
+      trackpadAt = now;
+      return fingers;
     }
 
     function onWheel(e) {

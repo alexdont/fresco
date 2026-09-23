@@ -52,6 +52,7 @@ defmodule Fresco.WheelGesturesTest do
       var log = [];
       #{consts}
       var trackpadAt = 0;
+      var burstKind = null;
       // A clock the test drives, so the burst window can be walked across
       // without waiting for it.
       var __now = 1000000;   // a real clock is never 0, and the latch's sentinel is
@@ -109,6 +110,27 @@ defmodule Fresco.WheelGesturesTest do
 
       # …and the same small delta with no such claim is fingers.
       assert [%{"gesture" => "pan"}] = wheel([evt(%{"deltaY" => 4, "wheelDeltaY" => -12})])
+    end
+
+    test "a wheel's smoothed-out notch zooms all the way, not just its first event" do
+      # The one that made the wheel feel broken. A Mac does not hand a
+      # notch over as one event: it smooths it into a run of small deltas
+      # shaped exactly like fingers, and only the first of them carries
+      # the notch. Judged one by one, the first zoomed and the rest
+      # panned — a whole notch of scrolling buying two percent of zoom.
+      log =
+        wheel(
+          [
+            evt(%{"deltaY" => 10, "wheelDeltaY" => -120}),
+            evt(%{"deltaY" => 8, "wheelDeltaY" => -24}),
+            evt(%{"deltaY" => 5, "wheelDeltaY" => -15}),
+            evt(%{"deltaY" => 2, "wheelDeltaY" => -6})
+          ],
+          times: "[0, 30, 60, 90]"
+        )
+
+      assert Enum.map(log, & &1["gesture"]) == ["zoom", "zoom", "zoom", "zoom"],
+             "the whole notch zooms, or the wheel moves a fraction of what it should"
     end
 
     test "a long run of notch-shaped events cannot outlast the flick that owns them" do
