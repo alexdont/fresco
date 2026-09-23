@@ -53,6 +53,11 @@ defmodule Fresco.WheelGesturesTest do
       #{consts}
       var trackpadAt = 0;
       var burstKind = null;
+      // The engine's live scale, and the temporary recorder that reads it.
+      var s = 1;
+      function wheelDebug() {}
+      var LINE_PX = 40;
+      var PAGE_PX = 800;
       // A clock the test drives, so the burst window can be walked across
       // without waiting for it.
       var __now = 1000000;   // a real clock is never 0, and the latch's sentinel is
@@ -67,6 +72,8 @@ defmodule Fresco.WheelGesturesTest do
       function zoomAt(px, py, k) { log.push({ gesture: "zoom", px: px, py: py, k: k }); }
       function panRaw(dx, dy) { log.push({ gesture: "pan", dx: dx, dy: dy }); }
       function panBy(dx, dy) { if (panLocked) return; panRaw(dx, dy); }
+      #{lift(src, "    function wheelPxY(e) {")}
+      #{lift(src, "    function wheelPxX(e) {")}
       #{lift(src, "    function wheelIsFingers(e) {")}
       #{lift(src, "    function onWheel(e) {")}
 
@@ -193,6 +200,41 @@ defmodule Fresco.WheelGesturesTest do
       # Firefox reports whole lines (deltaMode 1). Three lines is a small
       # number, and reading it as px would make every Firefox scroll a pan.
       assert [%{"gesture" => "zoom"}] = wheel([evt(%{"deltaY" => 3, "deltaMode" => 1})])
+    end
+
+    test "a wheel counting in lines zooms the same as one counting in pixels" do
+      # The bug behind "the wheel is super slow", found in a log of real
+      # events: this mouse reports SIX LINES a notch where another reports
+      # 120 pixels, and everything here is priced in pixels. The notch
+      # bought 0.9% of zoom instead of 20%.
+      assert [%{"gesture" => "zoom", "k" => k}] =
+               wheel([evt(%{"deltaY" => -6, "deltaMode" => 1, "wheelDeltaY" => 120})])
+
+      assert_in_delta k, :math.exp(120 * rate("WHEEL_RATE")), 1.0e-12
+    end
+
+    test "…and a legacy value that is not in pixels is ignored" do
+      # An event built by script carries the line count in `wheelDeltaY`
+      # rather than the browser's 120-a-notch currency. Trusting a 6 there
+      # is the bug this conversion exists to undo.
+      assert [%{"gesture" => "zoom", "k" => k}] =
+               wheel([evt(%{"deltaY" => -6, "deltaMode" => 1, "wheelDeltaY" => -6})])
+
+      assert_in_delta k, :math.exp(6 * 40 * rate("WHEEL_RATE")), 1.0e-12
+    end
+
+    test "…and without the legacy field, a line is worth 40px" do
+      assert [%{"gesture" => "zoom", "k" => k}] =
+               wheel([evt(%{"deltaY" => -3, "deltaMode" => 1})])
+
+      assert_in_delta k, :math.exp(3 * 40 * rate("WHEEL_RATE")), 1.0e-12
+    end
+
+    test "pages are pixels too" do
+      assert [%{"gesture" => "zoom", "k" => k}] =
+               wheel([evt(%{"deltaY" => -1, "deltaMode" => 2})])
+
+      assert_in_delta k, :math.exp(800 * rate("WHEEL_RATE")), 1.0e-12
     end
   end
 

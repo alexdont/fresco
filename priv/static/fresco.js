@@ -1323,6 +1323,41 @@
     var TRACKPAD_BURST_MS = 400;   // quiet for this long and the next event is judged afresh
     var burstKind = null;          // "fingers" | "wheel" — who owns the flick in progress
     var WHEEL_RATE = 0.0015;       // zoom per px of wheel
+
+    // Wheels do not all speak in pixels, and everything here is priced in
+    // them. A wheel that reports LINES — `deltaMode` 1, which plenty of
+    // mice and Firefox do — sends 6 for the notch that a pixel-reporting
+    // one sends 120 for, so the same notch bought a twentieth of the zoom
+    // and moved the picture six pixels. It read as a viewer that would
+    // not zoom and could not be scrolled anywhere, and no amount of
+    // reading the device better was going to fix a unit.
+    //
+    // The legacy `wheelDelta` is the browser's own pixel currency — 120 a
+    // notch, whatever the mode — so it converts line deltas exactly where
+    // it is there, and a line is worth 40px where it is not (the number
+    // Firefox itself uses: 3 lines to a 120px notch).
+    var LINE_PX = 40;
+    var PAGE_PX = 800;
+
+    function wheelPxY(e) {
+      if (e.deltaMode === 0) return e.deltaY;
+      if (e.deltaMode === 2) return e.deltaY * PAGE_PX;
+      var legacy = typeof e.wheelDeltaY === "number" ? e.wheelDeltaY
+                 : (typeof e.wheelDelta === "number" ? e.wheelDelta : 0);
+      // Only when it is really in that currency: an event built by script
+      // carries the line count itself there, and taking a 6 at face value
+      // is the very mistake this function exists to undo. A notch is 120;
+      // anything under a single line's worth is not pixels.
+      if (Math.abs(legacy) >= LINE_PX && e.deltaY !== 0) {
+        return Math.abs(legacy) * (e.deltaY > 0 ? 1 : -1);
+      }
+      return e.deltaY * LINE_PX;
+    }
+
+    function wheelPxX(e) {
+      if (e.deltaMode === 0) return e.deltaX;
+      return e.deltaX * (e.deltaMode === 2 ? PAGE_PX : LINE_PX);
+    }
     // Zoom per px of pinch. Fingers move a picture a few px at a time, so
     // this is the dial that decides whether a pinch crosses a zoom level
     // or has to be repeated until it does — tuned by hand against real
@@ -1378,6 +1413,53 @@
       return fingers;
     }
 
+    // ── Temporary: what the wheel actually sent, and what it did ─────────
+    //
+    // A Mac mouse and a trackpad send nearly the same stream, and the
+    // reading above has to guess which is which. This records the guess
+    // next to the numbers it was made from, and posts each burst to the
+    // server as a path the request log keeps — so a device that reads
+    // wrong can be named from the log instead of guessed at again.
+    //
+    // Off unless the page was opened with `?wheeldebug=1`. Remove once the
+    // reading is settled.
+    var wheelDebugOn = false;
+    try { wheelDebugOn = /[?&]wheeldebug=1/.test(window.location.search); } catch (_) {}
+    var wheelLog = [];
+    var wheelLogTimer = null;
+
+    function wheelDebugNum(v) {
+      return String(Math.round(v * 100) / 100).replace("-", "n").replace(".", "d");
+    }
+
+    function wheelDebugFlush() {
+      wheelLogTimer = null;
+      if (!wheelLog.length) return;
+      var body = wheelLog.slice(0, 10).map(function(r) {
+        return [wheelDebugNum(r.dx), wheelDebugNum(r.dy), r.mode,
+                wheelDebugNum(r.legacy), r.keys, r.kind,
+                wheelDebugNum(r.s0), wheelDebugNum(r.s1)].join(":");
+      }).join(",");
+      var n = wheelLog.length;
+      wheelLog = [];
+      try {
+        new Image().src = "/frescowheel/n" + n + "/" + body + "?t=" + Date.now();
+      } catch (_) {}
+    }
+
+    function wheelDebug(e, kind, s0) {
+      if (!wheelDebugOn) return;
+      var legacy = typeof e.wheelDeltaY === "number" ? e.wheelDeltaY
+                 : (typeof e.wheelDelta === "number" ? e.wheelDelta : 0);
+      wheelLog.push({
+        dx: e.deltaX, dy: e.deltaY, mode: e.deltaMode, legacy: legacy, kind: kind,
+        keys: (e.ctrlKey ? "c" : "") + (e.metaKey ? "m" : "") + (e.shiftKey ? "s" : "") || "-",
+        s0: s0, s1: s
+      });
+      if (wheelLogTimer) clearTimeout(wheelLogTimer);
+      wheelLogTimer = setTimeout(wheelDebugFlush, 700);
+    }
+
     function onWheel(e) {
       if (isFromNav(e)) return;
       if (!gestureEnabled("wheel")) return;
@@ -1402,9 +1484,13 @@
         // for both makes one of them useless — a pinch you have to repeat
         // a dozen times to cross a zoom level, or a wheel that jumps two
         // per click. So each keeps its own.
-        if (e.deltaY) {
-          zoomAt(px, py, Math.exp(-e.deltaY * (wheelIsFingers(e) ? PINCH_RATE : WHEEL_RATE)));
+        var s0Pinch = s;
+        var pinchFingers = wheelIsFingers(e);
+        var pinchPx = wheelPxY(e);
+        if (pinchPx) {
+          zoomAt(px, py, Math.exp(-pinchPx * (pinchFingers ? PINCH_RATE : WHEEL_RATE)));
         }
+        wheelDebug(e, pinchFingers ? "pinch" : "modwheel", s0Pinch);
         return;
       }
 
@@ -1419,12 +1505,15 @@
       // read as backwards to everyone who tried it, because a trackpad
       // that scrolls naturally has already done that inversion once, and
       // doing it twice lands back where a page would never be.
+      var s0 = s;
       if (wheelIsFingers(e)) {
-        if (gestureEnabled("pan")) panRaw(e.deltaX, e.deltaY);
+        if (gestureEnabled("pan")) panRaw(wheelPxX(e), wheelPxY(e));
+        wheelDebug(e, "fingers", s0);
         return;
       }
 
-      zoomAt(px, py, Math.exp(-e.deltaY * WHEEL_RATE));
+      zoomAt(px, py, Math.exp(-wheelPxY(e) * WHEEL_RATE));
+      wheelDebug(e, "wheel", s0);
     }
 
     function onDblClick(e) {
