@@ -1322,7 +1322,11 @@
     var TRACKPAD_STEP_MAX = 40;    // px a finger push stays under early in a flick
     var TRACKPAD_BURST_MS = 400;   // quiet for this long and the next event is judged afresh
     var WHEEL_RATE = 0.0015;       // zoom per px of wheel
-    var PINCH_RATE = 0.01;         // zoom per px of pinch
+    // Zoom per px of pinch. Fingers move a picture a few px at a time, so
+    // this is the dial that decides whether a pinch crosses a zoom level
+    // or has to be repeated until it does — tuned by hand against real
+    // hardware, like any gain.
+    var PINCH_RATE = 0.035;
     var trackpadAt = 0;            // when a finger-shaped event was last seen
 
     function wheelIsFingers(e) {
@@ -1387,16 +1391,30 @@
       // wheel's own rate a pinch across the whole trackpad barely moves
       // the picture.
       if (e.ctrlKey || e.metaKey) {
-        if (e.deltaY) zoomAt(px, py, Math.exp(-e.deltaY * PINCH_RATE));
+        // Fingers and a wheel are as far apart here as they are below: a
+        // pinch measures a few px an event, a notch a hundred. One rate
+        // for both makes one of them useless — a pinch you have to repeat
+        // a dozen times to cross a zoom level, or a wheel that jumps two
+        // per click. So each keeps its own.
+        if (e.deltaY) {
+          zoomAt(px, py, Math.exp(-e.deltaY * (wheelIsFingers(e) ? PINCH_RATE : WHEEL_RATE)));
+        }
         return;
       }
 
-      // Two fingers pushing the picture around. Gated on `pan` as well as
-      // `wheel`: a host that turned panning off means it, whichever device
-      // asks. The sign is the natural one — the picture follows the
-      // fingers, the way it follows a drag.
+      // Two fingers moving the view over the picture. Gated on `pan` as
+      // well as `wheel`: a host that turned panning off means it, whichever
+      // device asks.
+      //
+      // The sign is the scroll one, not the drag one: fingers pushing down
+      // take the view DOWN the picture, the way two fingers move a page,
+      // and the picture itself appears to go the other way. Reversed —
+      // the picture following the fingers, as it does under a drag — it
+      // read as backwards to everyone who tried it, because a trackpad
+      // that scrolls naturally has already done that inversion once, and
+      // doing it twice lands back where a page would never be.
       if (wheelIsFingers(e)) {
-        if (gestureEnabled("pan")) panRaw(-e.deltaX, -e.deltaY);
+        if (gestureEnabled("pan")) panRaw(e.deltaX, e.deltaY);
         return;
       }
 

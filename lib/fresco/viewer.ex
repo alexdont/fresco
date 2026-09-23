@@ -143,7 +143,7 @@ defmodule Fresco.Viewer do
     enables all. Omitted entries are disabled.
 
     `:wheel` covers everything that arrives as a wheel event: a notch of a
-    mouse wheel zooms, two fingers on a trackpad move the picture (that
+    mouse wheel zooms, two fingers on a trackpad move the view (that
     one needs `:pan` too), and a pinch zooms. See `Fresco.Canvas.canvas/1`
     for the full story.
     """

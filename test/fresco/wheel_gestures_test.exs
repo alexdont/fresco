@@ -20,6 +20,14 @@ defmodule Fresco.WheelGesturesTest do
 
   @source Path.expand("../../priv/static/fresco.js", __DIR__)
 
+  # The rates are dials, tuned by hand against real hardware, so the tests
+  # read them rather than restate them — what is pinned is the shape of the
+  # zoom and how far apart the two gains have to stay.
+  defp rate(name) do
+    [_, v] = Regex.run(~r/var #{name} = ([\d.]+);/, File.read!(@source))
+    String.to_float(v)
+  end
+
   defp lift(src, head) do
     start = :binary.match(src, head) |> elem(0)
     rest = binary_part(src, start, byte_size(src) - start)
@@ -97,7 +105,7 @@ defmodule Fresco.WheelGesturesTest do
       assert [%{"gesture" => "zoom", "k" => k}] =
                wheel([evt(%{"deltaY" => 4, "wheelDeltaY" => -120})])
 
-      assert_in_delta k, :math.exp(-4 * 0.0015), 1.0e-12
+      assert_in_delta k, :math.exp(-4 * rate("WHEEL_RATE")), 1.0e-12
 
       # …and the same small delta with no such claim is fingers.
       assert [%{"gesture" => "pan"}] = wheel([evt(%{"deltaY" => 4, "wheelDeltaY" => -12})])
@@ -153,7 +161,7 @@ defmodule Fresco.WheelGesturesTest do
                wheel([evt(%{"deltaY" => 120})])
 
       assert k < 1, "a notch away from the user zooms out"
-      assert_in_delta k, :math.exp(-120 * 0.0015), 1.0e-12
+      assert_in_delta k, :math.exp(-120 * rate("WHEEL_RATE")), 1.0e-12
 
       assert [%{"gesture" => "zoom", "k" => up}] = wheel([evt(%{"deltaY" => -120})])
       assert up > 1, "and a notch toward them zooms in"
@@ -167,22 +175,22 @@ defmodule Fresco.WheelGesturesTest do
   end
 
   describe "two fingers on a trackpad" do
-    test "move the picture, and it follows them" do
-      assert [%{"gesture" => "pan", "dx" => 12, "dy" => -8}] =
+    test "move the view, the way two fingers move a page" do
+      assert [%{"gesture" => "pan", "dx" => -12, "dy" => 8}] =
                wheel([evt(%{"deltaX" => -12, "deltaY" => 8})])
     end
 
-    test "grab and drag: the picture goes the way the fingers go" do
-      # With natural scrolling — the default on a laptop trackpad — fingers
-      # pushing down-right report negative deltas on both axes, because the
-      # content is being pulled down-right with them. Negating that is what
-      # makes the picture follow the fingers rather than run away from
-      # them: the gesture reads as grabbing the picture where you touched
-      # it and dragging it there.
+    test "the picture goes the opposite way to the fingers, as a page does" do
+      # A trackpad that scrolls naturally has already inverted once: fingers
+      # pushing down-right report negative deltas on both axes. Passing
+      # those through moves the VIEW that way and the picture the other —
+      # which is what a page does under the same fingers. Inverting again
+      # made the picture follow the fingers, and it read as backwards to
+      # everyone who tried it.
       assert [%{"gesture" => "pan", "dx" => dx, "dy" => dy}] =
                wheel([evt(%{"deltaX" => -18, "deltaY" => -24})])
 
-      assert dx > 0 and dy > 0, "down-right fingers move the picture down-right"
+      assert dx < 0 and dy < 0, "down-right fingers take the view down-right"
     end
 
     test "are recognised by a sideways component, a fraction, or a small step" do
@@ -219,12 +227,26 @@ defmodule Fresco.WheelGesturesTest do
   end
 
   describe "a pinch" do
-    test "zooms at the cursor, at its own rate" do
+    test "zooms at the cursor, at a gain fingers can actually cross a level with" do
       assert [%{"gesture" => "zoom", "k" => k}] =
                wheel([evt(%{"deltaY" => -10, "ctrlKey" => true})])
 
-      assert_in_delta k, :math.exp(10 * 0.01), 1.0e-12
-      assert k > :math.exp(10 * 0.0015), "a pinch moves further per px than a wheel notch"
+      assert_in_delta k, :math.exp(10 * rate("PINCH_RATE")), 1.0e-12
+
+      assert rate("PINCH_RATE") >= 10 * rate("WHEEL_RATE"),
+             "a pinch measures a few px an event where a notch measures a " <>
+               "hundred; at the wheel's gain it takes dozens of them to " <>
+               "cross a zoom level"
+    end
+
+    test "but ctrl held on a MOUSE keeps the wheel's rate" do
+      # The same gesture reaches here from both devices, and their deltas
+      # are two orders of magnitude apart. One rate for both means either
+      # a pinch that goes nowhere or a wheel that jumps two levels a click.
+      assert [%{"gesture" => "zoom", "k" => k}] =
+               wheel([evt(%{"deltaY" => -120, "wheelDeltaY" => 120, "ctrlKey" => true})])
+
+      assert_in_delta k, :math.exp(120 * rate("WHEEL_RATE")), 1.0e-12
     end
 
     test "⌘ held is the same gesture, for a laptop whose fingers are spoken for" do
@@ -235,7 +257,7 @@ defmodule Fresco.WheelGesturesTest do
       assert [%{"gesture" => "zoom", "k" => k}] =
                wheel([evt(%{"deltaY" => -10, "metaKey" => true})])
 
-      assert_in_delta k, :math.exp(10 * 0.01), 1.0e-12
+      assert_in_delta k, :math.exp(10 * rate("PINCH_RATE")), 1.0e-12
     end
 
     test "is a zoom even when it looks finger-shaped" do

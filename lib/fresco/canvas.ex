@@ -660,7 +660,9 @@ defmodule Fresco.Canvas do
 
     `:wheel` covers everything that arrives as a wheel event, which is
     three gestures on modern hardware: a notch of a mouse wheel zooms,
-    two fingers on a trackpad move the picture, and a pinch zooms (the
+    two fingers on a trackpad move the view over the picture (which the
+    picture answers by going the other way, as a page does), and a pinch
+    zooms (the
     browser reports it as a wheel with `ctrlKey` set, no key held) — as
     does scrolling with ctrl or ⌘ held, which is the steady way to zoom
     on a laptop now that two fingers are spoken for. A wheel names itself
