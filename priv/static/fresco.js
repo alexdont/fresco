@@ -261,12 +261,17 @@
       "}",
       // `touch-action: none` is critical for iOS Safari (blocks browser pinch).
       // `user-select: none` blocks i-beam highlight on the host.
+      // `-webkit-touch-callout: none` is the other half of that on iOS: a long
+      // press raises the selection/callout UI there THROUGH `user-select:
+      // none`, which is how a finger resting on a canvas ends up highlighting
+      // the page behind it. Desktop browsers ignore the property.
       // `cursor: grab` signals draggability; engine swaps to `grabbing` via class.
       ".fresco-viewer {",
       "  position: relative; overflow: hidden;",
       "  touch-action: none;",
       "  user-select: none;",
       "  -webkit-user-select: none;",
+      "  -webkit-touch-callout: none;",
       "  cursor: grab;",
       "  background-color: var(--fresco-bg);",
       "  background-image: radial-gradient(circle, var(--fresco-grid-dot) 1px, transparent 1px);",
@@ -1123,7 +1128,28 @@
       var isMouse = e.pointerType === "mouse";
       if (isMouse && e.button !== 0 && e.button !== MIDDLE_BUTTON) return;
       var middle = isMouse && e.button === MIDDLE_BUTTON;
-      if (middle ? blocksMiddleDrag(e) : isFromNav(e)) return;
+
+      // An overlay that claims pointer input claims ONE pointer: a finger
+      // drawing a line, a cursor dragging a handle. Two fingers are a pinch,
+      // and that gesture is the canvas's whatever the overlay is doing with
+      // the first one — the same reasoning that already exempts the middle
+      // drag. Without this, moving around a board on a phone means putting
+      // the pen down, switching to the pan tool, panning, and switching
+      // back; and a second finger landing on a drawing overlay had nothing
+      // to pinch WITH, so it fed the stroke instead.
+      //
+      // The claimed first finger is still COUNTED, so the second one has
+      // something to pinch against. It starts no gesture of its own:
+      // `gestureStart` stays null, `onPointerMove` only updates its
+      // position, and `onPointerUp` clears it like any other.
+      if (middle ? blocksMiddleDrag(e) : isFromNav(e)) {
+        if (e.pointerType !== "touch") return;
+        if (pointers.size === 0) {
+          pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          return;
+        }
+        // A second finger: this one is ours.
+      }
       cancelAnimation();
       // Also stops the browser's middle-click autoscroll from kicking in
       // and fighting the drag.

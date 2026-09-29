@@ -4,6 +4,42 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.13.1 — 2026-09-29
+
+An overlay claims one pointer. Two fingers are a pinch, and a pinch is
+the canvas's.
+
+### Fixed
+
+- **A second finger on an overlay that has claimed pointer input is a
+  pinch.** `[data-fresco-no-capture]` is a peer overlay saying "I handle
+  pointer input in here" — Etcher stamps it on the layer it draws into,
+  and honouring it is what keeps a stroke from dragging the canvas out
+  from under itself. But an overlay claims ONE pointer: a finger drawing
+  a line, a cursor dragging a handle. The second one had nothing to
+  pinch WITH, because the viewer had been told to ignore the first, so
+  on a phone it fed the stroke instead — the line whipped back and forth
+  between the two fingers for as long as they both moved, and moving
+  around a board meant putting the pen down, switching to the pan tool,
+  panning, and switching back.
+
+  A claimed finger is now COUNTED while still starting no gesture of its
+  own: `gestureStart` stays null, `onPointerMove` only updates its
+  position, and `onPointerUp` clears it like any other. The second
+  finger is the viewer's and pinches against the first. The same
+  exemption the middle drag has had, for the same reason — the lock
+  exists to free the left drag for something else, not to forbid moving
+  around — and it holds while `pan_locked` is set, which is exactly when
+  a tool is armed and a board most needs to be moved.
+
+  A mouse and a pen stay claimed outright: there is no second pointer
+  coming, and a drag that draws must not also pan.
+
+- **`-webkit-touch-callout: none` on the viewer.** The other half of
+  refusing a long press on iOS, where the callout comes up THROUGH
+  `user-select: none`. No other engine implements the property, and
+  Chrome does not report it through `getComputedStyle`.
+
 ## 0.13.0 — 2026-09-23
 
 A wheel event can mean three different things on modern hardware, and
