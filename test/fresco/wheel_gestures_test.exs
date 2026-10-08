@@ -61,6 +61,7 @@ defmodule Fresco.WheelGesturesTest do
       var __times = #{Keyword.get(opts, :times, "null")};
       Date.now = function() { return __now; };
       var panLocked = #{Keyword.get(opts, :pan_locked, false)};
+      var twoFingerPanInverted = #{Keyword.get(opts, :inverted, false)};
       var gestures = #{Keyword.get(opts, :gestures, "null")};
       function gestureEnabled(name) { return gestures === null || gestures.indexOf(name) !== -1; }
       function isFromNav() { return #{Keyword.get(opts, :from_nav, false)}; }
@@ -79,6 +80,18 @@ defmodule Fresco.WheelGesturesTest do
     })();
     """
 
+    {out, 0} = System.cmd("node", ["-e", js], stderr_to_stdout: true)
+    Jason.decode!(String.trim(out))
+  end
+
+  # `lift` for a function at the bundle's top level, two spaces in.
+  defp lift_top(src, head) do
+    start = :binary.match(src, head) |> elem(0)
+    rest = binary_part(src, start, byte_size(src) - start)
+    binary_part(rest, 0, :binary.match(rest, "\n  }") |> elem(0)) <> "\n  }"
+  end
+
+  defp run_js(js) do
     {out, 0} = System.cmd("node", ["-e", js], stderr_to_stdout: true)
     Jason.decode!(String.trim(out))
   end
@@ -284,6 +297,37 @@ defmodule Fresco.WheelGesturesTest do
 
     test "but not when the host turned panning off" do
       assert [] = wheel([evt(%{"deltaY" => 6})], gestures: ~s(["wheel", "pinch"]))
+    end
+
+    test "go the other way, both axes, when the host inverts them" do
+      # For a trackpad whose OS scrolls the other way to most: the browser
+      # has already applied that setting and does not say which it was, so
+      # the flip has to come from the host.
+      assert [%{"gesture" => "pan", "dx" => 18, "dy" => 24}] =
+               wheel([evt(%{"deltaX" => -18, "deltaY" => -24})], inverted: true)
+    end
+
+    test "inverting touches only the fingers — a notch and a pinch zoom as before" do
+      for e <- [
+            evt(%{"deltaY" => 120, "wheelDeltaY" => -120}),
+            evt(%{"deltaY" => 6, "ctrlKey" => true})
+          ] do
+        assert wheel([e]) == wheel([e], inverted: true)
+      end
+    end
+
+    test "the data attribute reaches the engine" do
+      src = File.read!(@source)
+
+      js = """
+      #{lift_top(src, "  function readConstraintAttrs(el) {")}
+      console.log(JSON.stringify([
+        readConstraintAttrs({ dataset: { invertTwoFingerPan: "true" } }).invertTwoFingerPan === true,
+        readConstraintAttrs({ dataset: {} }).invertTwoFingerPan === undefined
+      ]));
+      """
+
+      assert run_js(js) == [true, true]
     end
   end
 

@@ -658,6 +658,7 @@
     var ceil = parseFloat(el.dataset.zoomCeiling);
     if (!isNaN(ceil) && ceil > 0) opts.zoomCeiling = ceil;
     if (el.dataset.panLocked === "true") opts.panLocked = true;
+    if (el.dataset.invertTwoFingerPan === "true") opts.invertTwoFingerPan = true;
     // `data-gestures` mirrors the `data-nav-buttons` semantics
     // — see comment above the nav-buttons branch for the "none"
     // sentinel rationale.
@@ -717,6 +718,7 @@
     var initialZoomFloor   = opts.zoomFloor;
     var initialZoomCeiling = opts.zoomCeiling;
     var initialPanLocked   = !!opts.panLocked;
+    var initialInvertTwoFingerPan = !!opts.invertTwoFingerPan;
     var initialGestures    = opts.gestures;     // array or undefined
     var initialNavButtons  = opts.navButtons;   // array or undefined
     var initialRotation    = opts.rotation;     // number or undefined
@@ -761,6 +763,11 @@
     var customSMin = (typeof initialZoomFloor === "number") ? initialZoomFloor : null;
     var customSMax = (typeof initialZoomCeiling === "number") ? initialZoomCeiling : null;
     var panLocked = initialPanLocked;
+    // Two-finger pan's direction, flipped. The browser hands over the
+    // fingers' movement already run through the OS's own scroll-direction
+    // setting, and nothing in the event says which setting that was, so
+    // the default can only suit most machines — this is for the rest.
+    var twoFingerPanInverted = initialInvertTwoFingerPan;
     // Which mouse button started the current drag (0 = left, 1 = middle).
     // Reset when the last pointer lifts. Non-mouse pointers report 0.
     var panButton = 0;
@@ -1482,7 +1489,10 @@
       // that scrolls naturally has already done that inversion once, and
       // doing it twice lands back where a page would never be.
       if (wheelIsFingers(e)) {
-        if (gestureEnabled("pan")) panRaw(wheelPxX(e), wheelPxY(e));
+        if (gestureEnabled("pan")) {
+          var dir = twoFingerPanInverted ? -1 : 1;
+          panRaw(dir * wheelPxX(e), dir * wheelPxY(e));
+        }
         return;
       }
 
@@ -1643,6 +1653,12 @@
     // zoomed in).
     function setPanLocked(b) { panLocked = !!b; }
 
+    // Flip two-finger pan for a machine whose trackpad scrolls the other
+    // way to most (see `twoFingerPanInverted`). Takes effect on the next
+    // wheel event, mid-flick included.
+    function setTwoFingerPanInverted(b) { twoFingerPanInverted = !!b; }
+    function getTwoFingerPanInverted() { return twoFingerPanInverted; }
+
     // Clamp pan to a custom rect (canvas-pixel coords). Overrides
     // infinite_canvas's no-clamp contract. Pass null to revert.
     // Triggers an immediate re-clamp + frame so the new constraint
@@ -1786,6 +1802,8 @@
       getZoomFloor: function() { return customSMin; },
       setZoomCeiling: setZoomCeiling,
       setPanLocked: setPanLocked,
+      setTwoFingerPanInverted: setTwoFingerPanInverted,
+      getTwoFingerPanInverted: getTwoFingerPanInverted,
       setPanBounds: setPanBounds,
       setHomeAction: setHomeAction,
       suppressNextTap: suppressNextTap,
@@ -1853,6 +1871,7 @@
       zoomFloor: attrOpts.zoomFloor,
       zoomCeiling: attrOpts.zoomCeiling,
       panLocked: attrOpts.panLocked,
+      invertTwoFingerPan: attrOpts.invertTwoFingerPan,
       gestures: attrOpts.gestures,
       navButtons: attrOpts.navButtons,
       rotation: attrOpts.rotation,
@@ -2002,6 +2021,8 @@
       getZoomFloor: engine.getZoomFloor,
       setZoomCeiling: engine.setZoomCeiling,
       setPanLocked: engine.setPanLocked,
+      setTwoFingerPanInverted: engine.setTwoFingerPanInverted,
+      getTwoFingerPanInverted: engine.getTwoFingerPanInverted,
       setRotation: engine.setRotation,
       getRotation: engine.getRotation,
       rotateBy: engine.rotateBy,
@@ -2121,6 +2142,8 @@
       getZoomFloor:   function() { return controller.getZoomFloor(); },
       setZoomCeiling: function(v) { controller.setZoomCeiling(v); },
       setPanLocked:   function(b) { controller.setPanLocked(b); },
+      setTwoFingerPanInverted: function(b) { controller.setTwoFingerPanInverted(b); },
+      getTwoFingerPanInverted: function() { return controller.getTwoFingerPanInverted(); },
       // Rotation controls — documented on <Fresco.viewer>'s
       // :initial_rotation attr since 0.5.7 but only ever exposed on the
       // canvas handle; the engine has supported them all along (the
@@ -2264,6 +2287,7 @@
       zoomFloor: canvasAttrOpts.zoomFloor,
       zoomCeiling: canvasAttrOpts.zoomCeiling,
       panLocked: canvasAttrOpts.panLocked,
+      invertTwoFingerPan: canvasAttrOpts.invertTwoFingerPan,
       gestures: canvasAttrOpts.gestures,
       navButtons: canvasAttrOpts.navButtons,
       rotation: canvasAttrOpts.rotation,
@@ -2841,6 +2865,8 @@
       getZoomFloor: engine.getZoomFloor,
       setZoomCeiling: engine.setZoomCeiling,
       setPanLocked: engine.setPanLocked,
+      setTwoFingerPanInverted: engine.setTwoFingerPanInverted,
+      getTwoFingerPanInverted: engine.getTwoFingerPanInverted,
       setPanBounds: engine.setPanBounds,
       setHomeAction: engine.setHomeAction,
       suppressNextTap: engine.suppressNextTap,
@@ -3016,6 +3042,8 @@
       getZoomFloor:   function() { return controller.getZoomFloor(); },
       setZoomCeiling: function(v) { controller.setZoomCeiling(v); },
       setPanLocked:   function(b) { controller.setPanLocked(b); },
+      setTwoFingerPanInverted: function(b) { controller.setTwoFingerPanInverted(b); },
+      getTwoFingerPanInverted: function() { return controller.getTwoFingerPanInverted(); },
       // Per-region pan clamp + custom home action (both 0.5.2+).
       // Paged readers narrow `setPanBounds` to the current page rect
       // so dragging never wanders into adjacent pages, and override

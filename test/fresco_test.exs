@@ -106,6 +106,18 @@ defmodule FrescoTest do
       assert html =~ ~s(data-pan-locked="true")
     end
 
+    test "invert_two_finger_pan is omitted by default and renders when set" do
+      refute render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg") =~
+               "data-invert-two-finger-pan"
+
+      assert render_component(&Fresco.viewer/1,
+               id: "v",
+               src: "/x.jpg",
+               invert_two_finger_pan: true
+             ) =~
+               ~s(data-invert-two-finger-pan="true")
+    end
+
     test "gestures / nav_buttons default to omitted (back-compat)" do
       html = render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg")
       refute html =~ "data-gestures"
@@ -401,6 +413,20 @@ defmodule FrescoTest do
       canvas = build_canvas()
       html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas, pan_locked: true)
       assert html =~ ~s(data-pan-locked="true")
+    end
+
+    test "invert_two_finger_pan is omitted by default and renders when set" do
+      canvas = build_canvas()
+
+      refute render_component(&Fresco.canvas/1, id: "b", canvas: canvas) =~
+               "data-invert-two-finger-pan"
+
+      assert render_component(&Fresco.canvas/1,
+               id: "b",
+               canvas: canvas,
+               invert_two_finger_pan: true
+             ) =~
+               ~s(data-invert-two-finger-pan="true")
     end
 
     test "initial_fit_image_id / initial_fit_bounds / memory_window / gestures / nav_buttons default to omitted" do

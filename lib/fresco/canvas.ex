@@ -608,6 +608,20 @@ defmodule Fresco.Canvas do
     """
   )
 
+  attr(:invert_two_finger_pan, :boolean,
+    default: false,
+    doc: """
+    When `true`, two fingers on a trackpad pan the other way: the picture
+    follows the fingers instead of the view moving over it like a page.
+    The browser reports the fingers' movement after the OS's own
+    scroll-direction setting has been applied, and nothing tells the
+    page which setting that was, so the default suits most machines and
+    this is for the rest — typically fed from a per-user preference.
+
+    Toggle at runtime via `handle.setTwoFingerPanInverted(true|false)`.
+    """
+  )
+
   attr(:initial_fit_image_id, :string,
     default: nil,
     doc: """
@@ -843,6 +857,7 @@ defmodule Fresco.Canvas do
       data-zoom-floor={@zoom_floor && to_string(@zoom_floor)}
       data-zoom-ceiling={@zoom_ceiling && to_string(@zoom_ceiling)}
       data-pan-locked={@pan_locked && "true"}
+      data-invert-two-finger-pan={@invert_two_finger_pan && "true"}
       data-initial-fit-image-id={@initial_fit_image_id}
       data-initial-fit-bounds={@initial_fit_bounds_json}
       data-memory-window={@memory_window && Integer.to_string(@memory_window)}
