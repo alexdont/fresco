@@ -4,6 +4,28 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.13.2 — 2026-10-08
+
+Two fingers on a trackpad can pan the other way, for the machines whose
+trackpad scrolls the other way to most.
+
+### Added
+
+- **`invert_two_finger_pan`** on `<Fresco.viewer>` and `<Fresco.canvas>`
+  (`data-invert-two-finger-pan="true"`), and
+  `handle.setTwoFingerPanInverted(bool)` / `handle.getTwoFingerPanInverted()`
+  at runtime. On, the picture follows the fingers instead of the view
+  moving over it like a page. Off by default, so nothing changes for
+  anyone who does not ask.
+
+  It cannot be a better default instead. The browser hands over the
+  fingers' movement after the OS's own scroll-direction setting has been
+  applied, and nothing in the event says which setting that was — so the
+  default suits most machines, and the rest need a switch, typically fed
+  from a per-user preference. It flips both axes and only the fingers: a
+  notch, a pinch and ctrl/⌘ + scroll zoom exactly as before. The setter
+  takes effect on the next wheel event, mid-flick included.
+
 ## 0.13.1 — 2026-09-29
 
 An overlay claims one pointer. Two fingers are a pinch, and a pinch is
