@@ -4,6 +4,59 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.13.3 — 2026-10-09
+
+A viewer whose controls fit a phone: the nav can be a short row along the
+top, the buttons that do not fit wait behind a "more" button, and a
+double click is a zoom you can get back out of.
+
+### Added
+
+- **`nav_layout: :row`** on `<Fresco.viewer>` and `<Fresco.canvas>`
+  (`data-nav-layout="row"`). The nav lines up along the top instead of
+  down the left edge — the column ran most of the way down a phone's
+  picture and into the host's own controls. `:column` stays the default.
+
+- **The nav fits the room it has, in either layout.** Buttons that do not
+  fit move behind a "more" (⋯) button at the end and come back when there
+  is room — a phone turned sideways, a split view dragged wider. Measured,
+  not breakpoints: the room depends on the host's chrome, the buttons
+  extensions added and which of those are showing. The built-ins go in
+  this order: fullscreen, rotate left, rotate right, zoom out, zoom in,
+  reset view. Buttons an extension appended never move. In a row,
+  `--fresco-nav-reserve-end` (a CSS custom property on any ancestor) keeps
+  the row clear of the host's own chrome in the top-right corner.
+
+- **`nav_overflow`** — built-in buttons that always live behind ⋯
+  (`[:fullscreen, :rotate_left, :home]`, say), for a short row of the
+  basics whatever the room.
+
+- **`nav_reverse`** — with a row, lay it out mirrored: the first buttons
+  sit at the inner end, nearest the middle of the viewer, and ⋯ out in
+  the corner.
+
+- **`appendNavButton(svg, title, onClick, { slot: n })`.** A slotted button
+  goes at the START of the nav, ordered by slot (0 first), whichever
+  script attaches first — so an extension's main control can lead the row.
+  Without a slot, buttons append as before.
+
+- **A `swipe` event** (`%{direction: "left" | "right"}`) on the bus, and a
+  bubbling `fresco:swipe` DOM event on the viewer element, for a one-finger
+  swipe across a picture at its fitted view — the host's cue to show the
+  next or previous one. Only at the fitted view: zoomed in, the same drag
+  is a pan and is never announced. Only a deliberate flick (50px or more,
+  mostly sideways, under 0.8s), touch or pen only; a mouse drag, a pinch,
+  a finger an overlay claimed and a cancelled touch never count. Gated on
+  a `"swipe"` gesture where a host passes an allowlist.
+
+### Changed
+
+- **A double click (or double tap) toggles.** From the fitted view it
+  zooms in 2× on that spot; from anywhere zoomed in it goes back to the
+  fitted view. It used to zoom in every time, so tapping the same spot to
+  get back out only went further in. Back keeps the rotation — that is
+  what reset view is for.
+
 ## 0.13.2 — 2026-10-08
 
 Two fingers on a trackpad can pan the other way, for the machines whose
