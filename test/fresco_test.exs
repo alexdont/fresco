@@ -106,6 +106,23 @@ defmodule FrescoTest do
       assert html =~ ~s(data-pan-locked="true")
     end
 
+    test "nav_layout: a column unless a row is asked for" do
+      refute render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg") =~ "data-nav-layout"
+
+      assert render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg", nav_layout: :row) =~
+               ~s(data-nav-layout="row")
+    end
+
+    test "nav_overflow renders as a list of names" do
+      refute render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg") =~ "data-nav-overflow"
+
+      assert render_component(&Fresco.viewer/1,
+               id: "v",
+               src: "/x.jpg",
+               nav_overflow: [:fullscreen, :rotate]
+             ) =~ ~s(data-nav-overflow="fullscreen,rotate")
+    end
+
     test "invert_two_finger_pan is omitted by default and renders when set" do
       refute render_component(&Fresco.viewer/1, id: "v", src: "/x.jpg") =~
                "data-invert-two-finger-pan"
@@ -413,6 +430,14 @@ defmodule FrescoTest do
       canvas = build_canvas()
       html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas, pan_locked: true)
       assert html =~ ~s(data-pan-locked="true")
+    end
+
+    test "nav_layout: a column unless a row is asked for" do
+      canvas = build_canvas()
+      refute render_component(&Fresco.canvas/1, id: "b", canvas: canvas) =~ "data-nav-layout"
+
+      assert render_component(&Fresco.canvas/1, id: "b", canvas: canvas, nav_layout: :row) =~
+               ~s(data-nav-layout="row")
     end
 
     test "invert_two_finger_pan is omitted by default and renders when set" do

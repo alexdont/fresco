@@ -186,7 +186,10 @@
     // mirrored on X (matrix(-1 0 0 1 24 0)), so the arrowhead reads top-left
     // and the loop spins CCW. A guaranteed visual mirror of the CW button
     // rather than a hand-drawn second glyph.
-    rotateLeft: '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><g transform="matrix(-1 0 0 1 24 0)"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path stroke-linecap="round" stroke-linejoin="round" d="M21 3v5h-5"/></g></svg>'
+    rotateLeft: '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><g transform="matrix(-1 0 0 1 24 0)"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path stroke-linecap="round" stroke-linejoin="round" d="M21 3v5h-5"/></g></svg>',
+    // Heroicons `ellipsis-horizontal` — the nav's overflow: the buttons
+    // that did not fit wait behind it.
+    more: '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 12a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0ZM12.75 12a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0ZM18.75 12a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z"/></svg>'
   };
 
   // Snap any rotation input to the nearest multiple of 90 and
@@ -235,9 +238,33 @@
       "  position: absolute; top: 12px; left: 12px; z-index: 10;",
       "  display: flex; flex-direction: column; gap: 6px;",
       "  pointer-events: auto;",
+      // The room the nav may take. What does not fit moves behind the
+      // "more" button rather than running off the viewer (see enhanceNav).
+      "  max-height: calc(100% - 24px);",
       "}",
+      // A row along the top. `--fresco-nav-reserve-end` is the host's own
+      // chrome at the far end of that edge (a close button, say): the row
+      // stops short of it and overflows instead of running underneath.
+      ".fresco-nav[data-layout=\"row\"] {",
+      "  flex-direction: row; max-height: none;",
+      "  max-width: calc(100% - 12px - var(--fresco-nav-reserve-end, 12px));",
+      "}",
+      // The overflow popover: a second strip, across the nav's direction.
+      // `.fresco-nav` too, so the buttons are styled alike and a press in it
+      // is chrome to the gesture handlers, not the start of a pan.
+      ".fresco-nav.fresco-nav-overflow {",
+      "  top: auto; left: auto; max-width: none; max-height: none;",
+      "  z-index: 11; flex-direction: row; padding: 6px; border-radius: 10px;",
+      "  background: var(--fresco-nav-overflow-bg, rgba(0, 0, 0, 0.25));",
+      "}",
+      ".fresco-nav[data-layout=\"row\"] + .fresco-nav-overflow { flex-direction: column; }",
+      // Mirrored: the first buttons sit at the INNER end of the row and
+      // "more" out in the corner — for a host whose main control should be
+      // the one nearest the middle of the screen, not the farthest away.
+      ".fresco-nav[data-layout=\"row\"][data-reverse] { flex-direction: row-reverse; }",
+      ".fresco-nav [hidden], .fresco-nav-overflow[hidden] { display: none !important; }",
       ".fresco-nav button {",
-      "  width: 36px; height: 36px;",
+      "  flex: none; width: 36px; height: 36px;",
       "  display: inline-flex; align-items: center; justify-content: center;",
       "  border: none; padding: 0; cursor: pointer;",
       "  background: var(--fresco-nav-bg); color: var(--fresco-nav-fg);",
@@ -436,12 +463,22 @@
   // `.setIcon(svg) / .setTitle(text) / .el`. No-op when navEl is null.
   // ===========================================================================
 
-  function attachNavButton(navEl, svg, title, onClick) {
+  //
+  // `opts.slot` (a number) puts the button at the START of the nav instead of
+  // the end, ordered by slot — so an extension's main control can lead the
+  // row whichever script happened to attach first. Slot 0 is first.
+  function attachNavButton(navEl, svg, title, onClick, opts) {
     if (!navEl) return function noop() {};
     var btn = makeButton(svg, title, onClick);
-    navEl.appendChild(btn);
+    var nav = navEl._frescoNav;
+    var slot = opts && typeof opts.slot === "number" ? opts.slot : null;
+    if (nav) nav.add(btn, slot);
+    else if (slot !== null) navEl.insertBefore(btn, navEl.firstChild);
+    else navEl.appendChild(btn);
     var remove = function removeButton() {
-      if (btn.parentNode === navEl) navEl.removeChild(btn);
+      // It may be in the overflow popover rather than the nav itself.
+      if (btn.parentNode) btn.parentNode.removeChild(btn);
+      if (nav) nav.relayout();
     };
     remove.setIcon = function(nextSvg) { btn.innerHTML = nextSvg; };
     remove.setTitle = function(nextTitle) {
@@ -620,22 +657,194 @@
     var enabled = (opts && typeof opts.navButtonEnabled === "function")
       ? opts.navButtonEnabled
       : function() { return true; };
-    if (enabled("fullscreen")) nav.appendChild(makeButton(ICONS.expand, "Toggle fullscreen", handlers.onFullscreen));
-    if (enabled("zoom_in"))    nav.appendChild(makeButton(ICONS.zoomIn,  "Zoom in",  handlers.onZoomIn));
-    if (enabled("zoom_out"))   nav.appendChild(makeButton(ICONS.zoomOut, "Zoom out", handlers.onZoomOut));
+    // Each built-in is named: the overflow moves them by name, in
+    // NAV_COLLAPSE order. Buttons an extension appends carry no name and
+    // never move.
+    function add(name, icon, title, handler) {
+      var btn = makeButton(icon, title, handler);
+      btn.setAttribute("data-fresco-nav", name);
+      nav.appendChild(btn);
+    }
+    if (enabled("fullscreen")) add("fullscreen", ICONS.expand, "Toggle fullscreen", handlers.onFullscreen);
+    if (enabled("zoom_in"))    add("zoom_in", ICONS.zoomIn, "Zoom in", handlers.onZoomIn);
+    if (enabled("zoom_out"))   add("zoom_out", ICONS.zoomOut, "Zoom out", handlers.onZoomOut);
     // `rotate` is the original clockwise button (+90); `rotate_left` is the
     // counter-clockwise twin (-90), rendered just before it so the pair reads
     // ↺ ↻. Neither is in the default nav_buttons list, so a consumer opts each
     // in explicitly (or passes no list = all buttons, which shows both).
     if (enabled("rotate_left") && handlers.onRotateLeft) {
-      nav.appendChild(makeButton(ICONS.rotateLeft, "Rotate left 90°", handlers.onRotateLeft));
+      add("rotate_left", ICONS.rotateLeft, "Rotate left 90°", handlers.onRotateLeft);
     }
     if (enabled("rotate") && handlers.onRotate) {
-      nav.appendChild(makeButton(ICONS.rotate, "Rotate right 90°", handlers.onRotate));
+      add("rotate", ICONS.rotate, "Rotate right 90°", handlers.onRotate);
     }
-    if (enabled("home"))       nav.appendChild(makeButton(ICONS.reset,   "Reset view", handlers.onFit));
+    if (enabled("home"))       add("home", ICONS.reset, "Reset view", handlers.onFit);
+    nav.setAttribute("data-layout", opts && opts.layout === "row" ? "row" : "column");
+    if (opts && opts.reverse) nav.setAttribute("data-reverse", "");
     host.appendChild(nav);
+    enhanceNav(nav, host, opts && Array.isArray(opts.overflow) ? opts.overflow : []);
     return nav;
+  }
+
+  // The order built-in buttons give up their place when the nav does not
+  // fit: the ones a person reaches for least go first. Zoom and "reset
+  // view" are what is left on the smallest screens, beside whatever an
+  // extension added (Etcher's pencil and eye), which never move — a host
+  // that put a button there wants it seen.
+  var NAV_COLLAPSE = ["fullscreen", "rotate_left", "rotate", "zoom_out", "zoom_in", "home"];
+
+  // Fits the nav to the room it has. Whatever does not fit moves into a
+  // popover behind a "more" button at the end, and moves back as the room
+  // returns — a phone held upright and then turned, a split view dragged
+  // wider. Measured rather than set by breakpoints, because the room
+  // depends on things only the page knows: the host's own chrome in the
+  // corner (`--fresco-nav-reserve-end`), the buttons extensions added, and
+  // which of those are showing right now.
+  //
+  // The nav carries `_frescoNav` so `attachNavButton` can slot an
+  // extension's button in before "more" and ask for a re-fit.
+  //
+  // `pinned` names built-ins the host wants behind "more" whatever the room
+  // (`nav_overflow`) — a short row of the basics, with the rest a press away.
+  function enhanceNav(nav, host, pinned) {
+    pinned = pinned || [];
+    var order = 0;
+    var kids = nav.children;
+    for (var i = 0; i < kids.length; i++) kids[i]._frescoOrder = order++;
+
+    var more = makeButton(ICONS.more, "More", function() { setOpen(pop.hidden); });
+    more.setAttribute("data-fresco-nav-more", "");
+    more.setAttribute("aria-expanded", "false");
+    more.hidden = true;
+    nav.appendChild(more);
+
+    var pop = document.createElement("div");
+    pop.className = "fresco-nav fresco-nav-overflow";
+    pop.hidden = true;
+    host.insertBefore(pop, nav.nextSibling);
+
+    var scheduled = false;
+    var torn = false;
+
+    function row() { return nav.getAttribute("data-layout") === "row"; }
+
+    function fits() {
+      return row()
+        ? nav.scrollWidth <= nav.clientWidth + 1
+        : nav.scrollHeight <= nav.clientHeight + 1;
+    }
+
+    function slotBack(btn) {
+      var ref = null;
+      var cur = nav.children;
+      for (var i = 0; i < cur.length; i++) {
+        if (cur[i] === more || cur[i]._frescoOrder > btn._frescoOrder) { ref = cur[i]; break; }
+      }
+      nav.insertBefore(btn, ref);
+    }
+
+    function relayout() {
+      scheduled = false;
+      if (torn) return;
+      // Not laid out (a hidden tab, a closed modal): nothing to measure, and
+      // measuring would collapse every button into the popover.
+      if (!host.clientWidth || !host.clientHeight) return;
+      while (pop.firstChild) slotBack(pop.firstChild);
+      more.hidden = true;
+      for (var p = 0; p < pinned.length; p++) {
+        var keep = nav.querySelector('[data-fresco-nav="' + pinned[p] + '"]');
+        if (keep) { pop.appendChild(keep); more.hidden = false; }
+      }
+      if (!fits()) {
+        more.hidden = false;
+        for (var i = 0; i < NAV_COLLAPSE.length && !fits(); i++) {
+          var btn = nav.querySelector('[data-fresco-nav="' + NAV_COLLAPSE[i] + '"]');
+          if (btn) pop.appendChild(btn);
+        }
+        // Keep the popover in the nav's own order, whatever order they left in.
+        Array.prototype.slice.call(pop.children)
+          .sort(function(a, b) { return a._frescoOrder - b._frescoOrder; })
+          .forEach(function(b) { pop.appendChild(b); });
+      }
+      if (!pop.firstChild) { more.hidden = true; setOpen(false); }
+      else if (!pop.hidden) place();
+    }
+
+    function schedule() {
+      if (scheduled || torn) return;
+      scheduled = true;
+      (window.requestAnimationFrame || setTimeout)(relayout);
+    }
+
+    function place() {
+      if (row()) {
+        pop.style.top = (nav.offsetTop + nav.offsetHeight + 6) + "px";
+        pop.style.left = (nav.offsetLeft + more.offsetLeft - 6) + "px";
+      } else {
+        pop.style.left = (nav.offsetLeft + nav.offsetWidth + 6) + "px";
+        pop.style.top = (nav.offsetTop + more.offsetTop - 6) + "px";
+      }
+    }
+
+    function onOutside(e) {
+      var t = e.target;
+      if (t && (pop.contains(t) || more.contains(t))) return;
+      setOpen(false);
+    }
+    function onKey(e) { if (e.key === "Escape") setOpen(false); }
+
+    function setOpen(open) {
+      if (open && !pop.firstChild) open = false;
+      pop.hidden = !open;
+      more.setAttribute("aria-expanded", open ? "true" : "false");
+      if (open) {
+        place();
+        document.addEventListener("pointerdown", onOutside, true);
+        document.addEventListener("keydown", onKey);
+      } else {
+        document.removeEventListener("pointerdown", onOutside, true);
+        document.removeEventListener("keydown", onKey);
+      }
+    }
+
+    var ro = null;
+    if (typeof ResizeObserver === "function") {
+      // The host for the room, the nav for a button shown or hidden.
+      ro = new ResizeObserver(schedule);
+      ro.observe(host);
+      ro.observe(nav);
+    }
+
+    nav._frescoNav = {
+      add: function(btn, slot) {
+        // Slotted buttons sort ahead of everything (built-ins start at 0);
+        // the rest join the end, before "more". The nav is kept in order
+        // so a built-in coming back from the popover finds its place.
+        btn._frescoOrder = typeof slot === "number" ? slot - 1000 : order++;
+        var ref = more;
+        var cur = nav.children;
+        for (var i = 0; i < cur.length; i++) {
+          if (cur[i] !== more && cur[i]._frescoOrder > btn._frescoOrder) { ref = cur[i]; break; }
+        }
+        nav.insertBefore(btn, ref);
+        schedule();
+      },
+      relayout: schedule,
+      setLayout: function(layout) {
+        nav.setAttribute("data-layout", layout === "row" ? "row" : "column");
+        setOpen(false);
+        schedule();
+      },
+      teardown: function() {
+        torn = true;
+        setOpen(false);
+        if (ro) { try { ro.disconnect(); } catch (_) {} ro = null; }
+        if (pop.parentNode) pop.parentNode.removeChild(pop);
+      },
+      // For tests and peers: the buttons waiting behind "more".
+      collapsed: function() { return Array.prototype.slice.call(pop.children); }
+    };
+    schedule();
   }
 
   // ===========================================================================
@@ -659,6 +868,11 @@
     if (!isNaN(ceil) && ceil > 0) opts.zoomCeiling = ceil;
     if (el.dataset.panLocked === "true") opts.panLocked = true;
     if (el.dataset.invertTwoFingerPan === "true") opts.invertTwoFingerPan = true;
+    if (el.dataset.navLayout === "row") opts.navLayout = "row";
+    if (el.dataset.navReverse === "true") opts.navReverse = true;
+    if (el.dataset.navOverflow) {
+      opts.navOverflow = el.dataset.navOverflow.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+    }
     // `data-gestures` mirrors the `data-nav-buttons` semantics
     // — see comment above the nav-buttons branch for the "none"
     // sentinel rationale.
@@ -748,6 +962,9 @@
     var bus = createEventBus();
     var pointers = new Map();
     var gestureStart = null;
+    // One-finger swipe tracking (see `endSwipe`). Started by the first
+    // finger down, spoiled by a second one, read when the last one lifts.
+    var swipe = null;
 
     // ── Consumer-controlled overrides (opt-in; null/false = engine defaults) ─
     // `customSMin` / `customSMax` shadow sMin / sMax in recomputeBounds.
@@ -1153,6 +1370,8 @@
         if (e.pointerType !== "touch") return;
         if (pointers.size === 0) {
           pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          // Claimed by an overlay (a pen drawing a stroke): not a swipe.
+          swipe = null;
           return;
         }
         // A second finger: this one is ours.
@@ -1163,6 +1382,13 @@
       e.preventDefault();
       panButton = isMouse ? e.button : 0;
       try { el.setPointerCapture(e.pointerId); } catch (_) {}
+      if (pointers.size === 0) {
+        swipe = isMouse ? null : {
+          x: e.clientX, y: e.clientY, t: Date.now(), atFit: s <= sFit * DBL_ZOOMED
+        };
+      } else {
+        swipe = null;   // a second finger: a pinch, not a swipe
+      }
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       el.classList.add("fresco--dragging");
       snapshotGesture();
@@ -1232,6 +1458,30 @@
       }
     }
 
+    // A one-finger swipe across a picture that is fully zoomed out: the
+    // host's cue to show the next or previous one (`swipe` on the bus, and a
+    // bubbling `fresco:swipe` DOM event for a host that would rather listen
+    // on an ancestor that outlives the viewer). Only at the fitted view,
+    // where a drag has nothing to pan — zoomed in, the same gesture is a pan
+    // and must stay one — and only for a deliberate flick: far enough,
+    // mostly sideways, quick. Touch and pen only; a mouse drag is never
+    // read as "next".
+    function endSwipe(e) {
+      var sw = swipe;
+      if (!sw || !sw.atFit || s > sFit * DBL_ZOOMED) return;
+      if (!gestureEnabled("swipe")) return;
+      var dx = e.clientX - sw.x;
+      var dy = e.clientY - sw.y;
+      if (Math.abs(dx) < SWIPE_MIN_PX) return;
+      if (Math.abs(dx) < Math.abs(dy) * SWIPE_RATIO) return;
+      if (Date.now() - sw.t > SWIPE_MAX_MS) return;
+      var detail = { direction: dx < 0 ? "left" : "right" };
+      bus._emit("swipe", detail);
+      if (typeof CustomEvent === "function") {
+        el.dispatchEvent(new CustomEvent("fresco:swipe", { bubbles: true, detail: detail }));
+      }
+    }
+
     function onPointerUp(e) {
       // Capture tap snapshot before mutating pointer state. Tap fires
       // only when the gesture was single-pointer and stayed below the
@@ -1255,6 +1505,8 @@
       gestureStart = null;
       panButton = 0;
       el.classList.remove("fresco--dragging");
+      if (e.type !== "pointercancel") endSwipe(e);
+      swipe = null;
 
       if (tapCandidate && e.type !== "pointercancel") {
         var rect = viewportRect();
@@ -1356,6 +1608,15 @@
     var TRACKPAD_BURST_MS = 400;   // quiet for this long and the next event is judged afresh
     var burstKind = null;          // "fingers" | "wheel" — who owns the flick in progress
     var WHEEL_RATE = 0.0015;       // zoom per px of wheel
+    // How far past the fitted scale counts as "zoomed in" for the double-click
+    // toggle: a hair of slack, so a view a wheel nudged by a pixel still
+    // reads as fitted and zooms in rather than snapping home.
+    var DBL_ZOOMED = 1.02;
+    // What counts as a swipe (see endSwipe): this far sideways, this much
+    // more sideways than up or down, inside this long.
+    var SWIPE_MIN_PX = 50;
+    var SWIPE_RATIO = 1.5;
+    var SWIPE_MAX_MS = 800;
 
     // Wheels do not all speak in pixels, and everything here is priced in
     // them. A wheel that reports LINES — `deltaMode` 1, which plenty of
@@ -1499,10 +1760,20 @@
       zoomAt(px, py, Math.exp(-wheelPxY(e) * WHEEL_RATE));
     }
 
+    // A toggle, the way photo viewers do it: from the fitted view a double
+    // click (or a double tap — phones send one) zooms in on that spot; from
+    // anywhere zoomed in, it goes back to the fitted view. It used to zoom in
+    // 2× every time, so tapping the same spot twice more to get back out
+    // only went further in, until the ceiling. Back means zoom and pan only:
+    // a rotation the user chose stays (that is what "reset view" is for).
     function onDblClick(e) {
       if (isFromNav(e)) return;
       if (!gestureEnabled("double_click")) return;
       cancelAnimation();
+      if (s > sFit * DBL_ZOOMED) {
+        requestHome();
+        return;
+      }
       var rect = viewportRect();
       zoomAt(e.clientX - rect.left, e.clientY - rect.top, 2);
     }
@@ -1582,7 +1853,10 @@
       onRotateLeft: function() { rotateBy(-90); },
       onFullscreen: toggleFullscreen
     }, {
-      navButtonEnabled: function(name) { return navButtonEnabled(name); }
+      navButtonEnabled: function(name) { return navButtonEnabled(name); },
+      layout: opts.navLayout,
+      overflow: opts.navOverflow,
+      reverse: opts.navReverse
     });
 
     var resizeObserver = null;
@@ -1615,6 +1889,7 @@
         try { resizeObserver.disconnect(); } catch (_) {}
         resizeObserver = null;
       }
+      if (navEl && navEl._frescoNav) navEl._frescoNav.teardown();
       if (navEl && navEl.parentNode) navEl.parentNode.removeChild(navEl);
     }
 
@@ -1872,6 +2147,9 @@
       zoomCeiling: attrOpts.zoomCeiling,
       panLocked: attrOpts.panLocked,
       invertTwoFingerPan: attrOpts.invertTwoFingerPan,
+      navLayout: attrOpts.navLayout,
+      navOverflow: attrOpts.navOverflow,
+      navReverse: attrOpts.navReverse,
       gestures: attrOpts.gestures,
       navButtons: attrOpts.navButtons,
       rotation: attrOpts.rotation,
@@ -2159,8 +2437,8 @@
       rotateLeft:     function() { controller.rotateBy(-90); },
       on: bus.on,
       _emit: bus._emit,
-      appendNavButton: function(svg, title, onClick) {
-        return attachNavButton(controller.navEl, svg, title, onClick);
+      appendNavButton: function(svg, title, onClick, opts) {
+        return attachNavButton(controller.navEl, svg, title, onClick, opts);
       }
     };
   }
@@ -2288,6 +2566,9 @@
       zoomCeiling: canvasAttrOpts.zoomCeiling,
       panLocked: canvasAttrOpts.panLocked,
       invertTwoFingerPan: canvasAttrOpts.invertTwoFingerPan,
+      navLayout: canvasAttrOpts.navLayout,
+      navOverflow: canvasAttrOpts.navOverflow,
+      navReverse: canvasAttrOpts.navReverse,
       gestures: canvasAttrOpts.gestures,
       navButtons: canvasAttrOpts.navButtons,
       rotation: canvasAttrOpts.rotation,
@@ -3106,8 +3387,8 @@
       getFocusedImage:     function() { return controller.getFocusedImage(); },
       on: bus.on,
       _emit: bus._emit,
-      appendNavButton: function(svg, title, onClick) {
-        return attachNavButton(controller.navEl, svg, title, onClick);
+      appendNavButton: function(svg, title, onClick, opts) {
+        return attachNavButton(controller.navEl, svg, title, onClick, opts);
       }
     };
   }

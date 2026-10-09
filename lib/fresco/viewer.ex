@@ -135,6 +135,40 @@ defmodule Fresco.Viewer do
     """
   )
 
+  attr(:nav_layout, :atom,
+    default: :column,
+    values: [:column, :row],
+    doc: """
+    How the nav buttons line up: `:column` (default) down the left edge, or
+    `:row` along the top. Either way, buttons that do not fit move behind a
+    "more" (⋯) button at the end, least-used first (fullscreen, rotate, then
+    zoom), and come back when there is room. Buttons an extension appends
+    stay put. In a row, set the CSS custom property
+    `--fresco-nav-reserve-end` on an ancestor to keep the row clear of the
+    host's own chrome in the top-right corner.
+    """
+  )
+
+  attr(:nav_overflow, :list,
+    default: [],
+    doc: """
+    Built-in nav buttons that always live behind the "more" (⋯) button,
+    whatever the room — e.g. `[:fullscreen, :rotate_left, :rotate, :home]`
+    for a short row of the basics. Buttons not listed still move there when
+    the nav runs out of room.
+    """
+  )
+
+  attr(:nav_reverse, :boolean,
+    default: false,
+    doc: """
+    With `nav_layout: :row`, lay the row out mirrored: the first buttons
+    (including an extension's slotted ones, like Etcher's pencil) sit at the
+    inner end, nearest the middle of the viewer, and the "more" (⋯) button
+    out in the corner.
+    """
+  )
+
   attr(:invert_two_finger_pan, :boolean,
     default: false,
     doc: """
@@ -250,6 +284,9 @@ defmodule Fresco.Viewer do
       data-zoom-ceiling={@zoom_ceiling && to_string(@zoom_ceiling)}
       data-pan-locked={@pan_locked && "true"}
       data-invert-two-finger-pan={@invert_two_finger_pan && "true"}
+      data-nav-layout={@nav_layout == :row && "row"}
+      data-nav-reverse={@nav_reverse && "true"}
+      data-nav-overflow={@nav_overflow != [] && Enum.map_join(@nav_overflow, ",", &to_string/1)}
       data-gestures={@gestures_csv}
       data-nav-buttons={@nav_buttons_csv}
       data-initial-rotation={@initial_rotation != 0 && to_string(@initial_rotation)}
