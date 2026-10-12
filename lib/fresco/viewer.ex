@@ -187,7 +187,7 @@ defmodule Fresco.Viewer do
     default: nil,
     doc: """
     Allowlist of enabled gestures. Atom list:
-    `[:pan, :pinch, :wheel, :double_click, :keyboard]`. Default `nil`
+    `[:pan, :pinch, :wheel, :double_click, :keyboard, :swipe]`. Default `nil`
     enables all. Omitted entries are disabled.
 
     `:wheel` covers everything that arrives as a wheel event: a notch of a

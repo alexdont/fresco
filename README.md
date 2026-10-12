@@ -1,8 +1,19 @@
 # Fresco
 
-Polished pan-zoom image viewer for Phoenix apps. The foundation for layered image experiences (deep zoom, annotations, ML overlays) — also useful standalone whenever you just need a *good* image viewer.
+Polished pan-zoom image viewer for Phoenix apps. The foundation for layered image experiences (annotations, progressive quality, ML overlays) — also useful standalone whenever you just need a *good* image viewer.
 
-A *fresco* is the wet-plaster surface you paint on. Fresco the library is the surface every layered image experience sits on top of: extensions attach to the same viewer instance via a small extension API. Used alone, it's still a complete viewer with pan, zoom, fit-to-view, Heroicons nav, viewport clamping, and smooth animations.
+A *fresco* is the wet-plaster surface you paint on. Fresco the library is the surface every layered image experience sits on top of: extensions attach to the same viewer instance via a small extension API. Used alone, it's still a complete viewer with pan, zoom, rotation, fit-to-view, a nav that fits a phone, and viewport clamping.
+
+---
+
+## How it works
+
+Fresco is its own small pan/zoom engine — **no OpenSeadragon, no `<canvas>` element, no external JavaScript**. (Versions before 0.5.0 were built on OpenSeadragon; 0.5.0 replaced it. See the CHANGELOG.)
+
+- The picture is an ordinary `<img>` inside a *stage* element. Pan, zoom and rotation are one CSS `transform` on the stage (`translate3d(…) rotate(…)`), and the image is sized for the current scale — so moving around is a GPU-composited transform, smooth on iOS Safari, with no per-frame redraw.
+- Input comes straight from the browser: Pointer Events for drags and pinches, wheel events for mouse wheels, trackpads and trackpad pinches, the keyboard, and the native Fullscreen API.
+- `<Fresco.canvas>` is the same engine with N images laid out at canvas-pixel coordinates, plus an open `extensions` map that peer packages (like [Etcher](https://hex.pm/packages/etcher)) keep their data in. A scene serializes to one `.fresco` JSON document.
+- Everything is in `priv/static/fresco.js`; nothing is fetched from a CDN at runtime.
 
 ---
 
@@ -11,12 +22,12 @@ A *fresco* is the wet-plaster surface you paint on. Fresco the library is the su
 ```elixir
 def deps do
   [
-    {:fresco, "~> 0.1"}
+    {:fresco, "~> 0.13"}
   ]
 end
 ```
 
-Then in your `assets/js/app.js`, import the JS hook and spread it into your LiveSocket hooks:
+Then in your `assets/js/app.js`, import the JS hooks and spread them into your LiveSocket hooks:
 
 ```js
 import "../../deps/fresco/priv/static/fresco.js"
@@ -26,9 +37,7 @@ let liveSocket = new LiveSocket("/live", Socket, {
 })
 ```
 
-The hook name is `FrescoViewer` — if you maintain an explicit hooks map instead of spreading `window.FrescoHooks`, register it as `{ FrescoViewer: window.FrescoHooks.FrescoViewer }`.
-
-OpenSeadragon is lazy-loaded from jsDelivr on first viewer mount — no extra `<script>` tags needed.
+The hooks are `FrescoViewer` (for `<Fresco.viewer>`) and `FrescoCanvas` (for `<Fresco.canvas>`) — if you maintain an explicit hooks map instead of spreading `window.FrescoHooks`, register both.
 
 ---
 
@@ -44,16 +53,17 @@ OpenSeadragon is lazy-loaded from jsDelivr on first viewer mount — no extra `<
 
 You get:
 
-- **Pan**: click-drag, middle-drag, touch-drag, keyboard arrows. Middle-drag
+- **Pan**: click-drag, middle-drag, touch-drag, two fingers on a trackpad, keyboard arrows. Middle-drag
   works even where the left button is spoken for — an overlay's drawing tool
-  or marquee selection, or `panLocked` — so there's always a way to move
+  or marquee selection, or `pan_locked` — so there's always a way to move
   around without switching tools.
-- **Zoom**: mouse wheel, pinch, double-click, dedicated buttons, `+` / `-` keys
+- **Zoom**: mouse wheel, pinch (touch or trackpad), ctrl/⌘ + scroll, double-click, nav buttons, `+` / `-` keys. A double-click (or double-tap) zooms in on that spot and, from anywhere zoomed in, back out to the fitted view.
+- **Rotation** in quarter turns, from the nav or the handle, optionally persisted (see [Rotation](#rotation)).
 - **Fit-to-view** initial state regardless of image / container aspect ratio
-- **Heroicons nav overlay**: zoom-in / zoom-out / reset / fullscreen
-- **Viewport clamped** so the image can't be panned off-screen
-- **Subtle dot-grid background** on the viewer container (Figma/Miro style); shows through any padding around the image and lights up the void in `infinite_canvas` mode. Override `.fresco-viewer` in your own CSS for dark mode or a different accent.
-- **Smooth animations** tuned snappy-but-not-jarring
+- **Nav overlay** (Heroicons): zoom in / zoom out / rotate / reset view / fullscreen — a column by default, or a short row that fits a phone (see [The nav on small screens](#the-nav-on-small-screens)).
+- **Viewport clamped** so the image can't be panned off-screen (unless you opt into [infinite canvas](#infinite-canvas))
+- **Subtle dot-grid background** on the viewer container (Figma/Miro style); shows through any padding around the image and lights up the void in `infinite_canvas` mode.
+- **Light / dark / system themes**, or inherit your app's palette (see [Theming](#theming-light--dark--system--inherit)).
 
 ---
 
@@ -72,39 +82,32 @@ Opt-in mode that unclamps the viewer — the user can pan past the image edges i
 
 What changes when `infinite_canvas` is on:
 
-- `visibilityRatio` drops to `0` (image can fully scroll off-screen)
-- `constrainDuringPan` flips to `false` (no rubber-band during drag)
-- `minZoomImageRatio` lowers to `0.05` so the image can shrink to a thumbnail
-- The default `.fresco-viewer` dot-grid background that's present on every viewer becomes visible in the void around the image (in default clamped mode it's covered by OSD's canvas). The host div also picks up a `.fresco-viewer--infinite` modifier class so you can target infinite-mode-only styling.
+- The image can be panned fully off-screen — pan is no longer clamped to keep it in view.
+- The zoom-out floor drops to 5% of the fitted scale, so the image can shrink to a thumbnail.
+- The dot-grid background shows in the void around the image, and the host div picks up a `.fresco-viewer--infinite` modifier class for infinite-mode-only styling.
 
-The home button (`reset zoom`) still returns to "image fits viewport" — the image stays the anchor point, just no longer the cage. Default is `infinite_canvas={false}`, so every existing viewer keeps the stock clamped behavior with no template changes required.
+The reset-view button still returns to "image fits viewport" — the image stays the anchor point, just no longer the cage. Default is `infinite_canvas={false}`, so every existing viewer keeps the stock clamped behavior with no template changes required.
 
 ---
 
-## Multiple images on one canvas
+## Multiple images on one canvas — `<Fresco.canvas>`
 
-Pass `:sources` (a list of maps) instead of `:src` to lay multiple images out on the same viewer. Each entry has `src` plus optional `x`, `y`, `width` in viewport units. The first image conventionally anchors the layout at `x: 0, y: 0, width: 1`, so `x: 1.1` means "just to the right with a 10% gap."
+`<Fresco.canvas>` lays any number of images out on one surface, at canvas-pixel coordinates, with the same gestures as the viewer. The scene is a `Fresco.Canvas` struct — images plus an `extensions` map for peer packages — that serializes to a single `.fresco` JSON document.
 
-```heex
-<Fresco.viewer
-  id="gallery"
-  sources={[
-    %{src: "/uploads/a.jpg"},
-    %{src: "/uploads/b.jpg", x: 1.1},
-    %{src: "/uploads/c.jpg", x: 0, y: 1.1, width: 0.8}
-  ]}
-  class="w-full h-[80vh] rounded"
-  infinite_canvas
-/>
+```elixir
+canvas =
+  Fresco.Canvas.new(width: 2000, height: 1200)
+  |> Fresco.Canvas.add_image(%{src: "/uploads/a.jpg", x: 0, y: 0, width: 900})
+  |> Fresco.Canvas.add_image(%{src: "/uploads/b.jpg", x: 1000, y: 0, width: 900})
 ```
 
-- Height is derived from each image's natural aspect ratio — don't specify it.
-- Each entry's `src` runs through the same source-provider chain as the single-image `:src`, so you can mix plain images with DZI tile pyramids handled by Tessera.
-- `:src` and `:sources` are mutually exclusive in practice — pass one. Both given, `:sources` wins.
-- Typically paired with `:infinite_canvas` so the user can pan freely across the layout. Without it, "Reset view" fits all sources into the viewport at mount.
-- Live re-renders that change the `:sources` list re-open the viewer while preserving the current zoom/pan — same trick as `swapSourcePreservingBounds`.
+```heex
+<Fresco.canvas id="board" canvas={canvas} class="w-full h-[80vh] rounded" infinite_canvas />
+```
 
-> ⚠️ **Caveat:** `handle.imageToScreen` / `screenToImage` currently operate on the **first source only**. If you're building an extension that needs to address pixels in source #2+ (e.g. annotations on a second image in the layout), you'll need to apply the offset yourself for now. Multi-image coordinate disambiguation is planned but not yet implemented.
+- Height can be left out: it comes from each image's natural aspect ratio.
+- `handle.imageToScreen` / `screenToImage` work in canvas pixels, so an overlay addresses every image in the same space.
+- Single-image is just the N = 1 case; `<Fresco.viewer>` remains the simpler component for one picture.
 
 ### Swapping the image set in place — `handle.setSources`
 
@@ -147,180 +150,54 @@ handle.fitBounds(handle.imageBoundsFor("page-" + n));  // measures correctly now
 
 ---
 
-## Optimized pan for long-scroll content
+## Long-scroll reading — `fresco_strip`
 
-Opt-in mode tuned for the long-scroll reading use case (manhwa, manga, comics, document viewers) where the user is panning continuously, not zooming. By default, OpenSeadragon repaints the canvas via `ctx.drawImage(tile)` every pan frame — fine for desktop, painfully slow on iOS Safari even on recent hardware. `pan_optimized` swaps the per-frame redraw for a GPU-composited `transform: translate3d` glide while pan is in flight, dropping per-frame cost from ~10–20ms to <1ms.
-
-```heex
-<Fresco.viewer
-  id="reader"
-  src={~p"/uploads/chapter.jpg"}
-  class="w-full h-screen"
-  pan_optimized
-/>
-```
-
-What changes when `pan_optimized` is on:
-
-- On pan-start, OSD's drawer is temporarily swapped for a no-op; the canvas stops repainting per frame.
-- Each pan tick applies `transform: translate3d(dx, dy, 0)` to the canvas element so the existing pixels visually glide with the user's gesture.
-- On pan-end (or zoom-change / overscan bail), the transform is cleared, OSD's drawer is restored, and the canvas repaints once at the committed position.
-- The fast path bails immediately if the user starts zooming, if rotation is active (`:rotate` invalidates the simple translate math), or if cumulative delta crosses ~50% of viewport height (overscan).
-
-### Coordinating overlays — the `fast-pan` event
-
-The fast path emits a synthetic `fast-pan` event on the handle so overlay extensions (annotations, ML highlights, custom HUDs) can transform in lockstep with the canvas. Three phases via `e.phase`:
-
-```js
-window.Fresco.onViewerReady("reader", function (handle) {
-  var overlay = document.getElementById("my-overlay");
-  handle.on("fast-pan", function (e) {
-    if (e.phase === "start") {
-      overlay.style.willChange = "transform";
-    }
-    if (e.phase === "start" || e.phase === "delta") {
-      overlay.style.transform = "translate3d(" + e.x + "px, " + e.y + "px, 0)";
-    }
-    if (e.phase === "end") {
-      overlay.style.transform = "";
-      overlay.style.willChange = "";
-      // OSD's viewport is now committed; your overlay can read fresh
-      // coordinates from `handle.imageToScreen(...)` again.
-    }
-  });
-});
-```
-
-[Etcher](https://hex.pm/packages/etcher) `>= 0.2.8` listens automatically — its SVG annotation layer transforms in lockstep with no consumer setup required. Older Etcher versions paired with Fresco `pan_optimized` will see annotations visibly drift during the pan window. Consumers without overlays can opt in unconditionally.
-
-> **Default is off.** Existing viewers see no behavior change unless they explicitly pass `pan_optimized`.
-
----
-
-## Strip mode for long-scroll content
-
-When the user is **reading by scrolling** through a stack of full-width images — manhwa / manga, long-form comics, IG-style feeds, documentation snapshots — the OpenSeadragon-backed `<Fresco.viewer>` is the wrong architecture. OSD redraws its `<canvas>` on every pan frame; on iOS Safari that burns most of the 16ms 60fps budget for content that doesn't need zoom. The `pan_optimized` fast-path partially helps but breaks down on large snaps that move past the painted viewport area.
-
-`<Fresco.scroll_strip>` is a sibling component for this exact case. Native browser scroll on DOM `<img>` elements. No canvas. No spring math. No per-frame JS. Memory windowing evicts off-screen image `src` attributes so a 50-image chapter doesn't pin hundreds of MB of decoded pixels.
-
-```heex
-<Fresco.scroll_strip
-  id="reader"
-  sources={[
-    %{url: "/img/page-01.jpg", width: 720, height: 9200},
-    %{url: "/img/page-02.jpg", width: 720, height: 8800},
-    %{url: "/img/page-03.jpg", width: 720, height: 9100}
-  ]}
-  class="w-full h-lvh"
-/>
-```
-
-### When to use which
-
-| | `<Fresco.viewer>` | `<Fresco.scroll_strip>` |
-|---|---|---|
-| **Use case** | Deep-zoom imagery; single mega-image you pan/zoom around | Long-scroll reading; stack of full-width images |
-| **Rendering** | OpenSeadragon canvas | DOM `<img>` + native scroll |
-| **Zoom** | Yes (wheel, pinch, buttons) | No (one zoom level — full width) |
-| **Pan** | OSD viewport math + spring | Native browser scroll |
-| **Mobile 60fps** | Tricky (canvas redraw); `pan_optimized` helps | Free — native scroll is GPU-composited |
-| **Memory** | OSD's tile lifecycle | Manual `src` evict outside ±N window |
-| **Etcher overlays** | Yes, via OSD coords | Yes (Etcher >= 0.3 required — uses per-image coords) |
-
-### Source-map requirements
-
-Each source must include `:url`, `:width`, and `:height` (in source pixels). Width and height drive the `aspect-ratio` CSS on each `<img>`, which is what makes memory windowing safe — removing `src` doesn't collapse the slot, so the scroll position never jumps. Omitting either dimension raises `ArgumentError` at render time.
-
-### The handle contract
-
-Look up the strip handle the same way as a viewer (or use the `onReady` alias):
-
-```js
-window.Fresco.onReady("reader", function (handle) {
-  // Scroll commands — replace panTo / panBy
-  handle.scrollTo({imageIdx: 3, y: 0, behavior: "smooth"});
-  handle.scrollBy({dy: 500, behavior: "instant"});
-
-  // State for progress UI / chapter resume
-  handle.getScrollState();
-  // → { scrollTop, scrollHeight, viewportH, currentImageIdx, fractionWithin }
-
-  // Coordinate adapters (per-image)
-  handle.imageToScreen({imageIdx: 0, x: 100, y: 200});
-  handle.screenToImage({x: 400, y: 800});
-  // → { imageIdx, x, y }
-
-  // Events
-  handle.on("scroll", function (e) { /* e.scrollTop, e.scrollHeight (rAF-throttled) */ });
-  handle.on("viewport-change", function (e) { /* e.currentImageIdx, e.fractionWithin */ });
-  handle.on("image-loaded", function (e) { /* e.imageIdx */ });
-  handle.on("image-evicted", function (e) { /* e.imageIdx */ });
-  handle.on("open", function (e) { /* e.sources — fires once on mount */ });
-
-  // Nav extension (strip ships with no built-in nav by default)
-  handle.appendNavButton(svgString, "My button", function () { /* … */ });
-});
-```
-
-### Server-pushed scrolling
-
-For chapter-resume / programmatic snapping:
-
-```elixir
-push_event(socket, "phx:scroll-to", %{imageIdx: 5, y: 0, behavior: "smooth"})
-```
-
-The hook forwards the payload straight to `handle.scrollTo/1`.
-
-### Memory windowing
-
-Default keeps `±1 / ±3` images loaded around the dominant visible image. Configure with `:window_before` and `:window_after`:
-
-```heex
-<Fresco.scroll_strip
-  id="reader"
-  sources={@sources}
-  window_before={2}
-  window_after={5}
-/>
-```
-
-Images outside the window get `src` evicted; on re-entry, `src` is restored and `image-loaded` fires. The `aspect-ratio` style on every `<img>` (computed from your source's width/height) keeps the layout perfectly stable through evict/restore cycles — no scroll jumps.
-
-### Optional CSS scroll-snap
-
-For IG-feed-style content (one image per screen):
-
-```heex
-<Fresco.scroll_strip id="feed" sources={@sources} snap_to_image={:mandatory} />
-```
-
-Accepts `:off` (default), `:mandatory`, `:proximity`. For tall continuous content (manhwa pages), keep at `:off` — snap would either lock you to image tops or yank mid-read.
-
-### Etcher annotations
-
-Etcher `>= 0.3` is required to render annotations on strip mode. Etcher's renderer adapter feature-detects via `"scrollTo" in handle` and dispatches to a strip-positioning module that inserts overlay nodes as siblings of the `<img>` elements — they scroll with the content natively, no per-frame positioning needed. Annotation payloads gain an `imageIdx` field (defaults to `0` for back-compat with viewer annotations).
-
-`handle.openSeadragon` is intentionally a **throwing getter** on the strip handle — accessing it usually means an overlay was written for the viewer host without a renderer adapter, and the thrown message points at the fix. Etcher 0.2 paired with a strip handle will see the error and fail loudly; that's by design.
-
-> ⚠️ **No zoom in strip mode.** If your reader needs occasional zoom (pinch / double-tap), use `<Fresco.viewer>` instead — strip mode is one zoom level by design.
+For reading by scrolling through a stack of full-width images (manhwa, long comics, feeds), use the sibling package [`fresco_strip`](https://hex.pm/packages/fresco_strip): native browser scroll over DOM `<img>`s with memory windowing, no zoom. It was `<Fresco.scroll_strip>` until it moved into its own package; it registers its handles in the same `window.Fresco` registry, so `onReady` works for both.
 
 ---
 
 ## Rotation
 
-Opt-in 90° rotation button. Adds a fifth button to the nav column that rotates the image 90° clockwise each click. Rotation is tracked independently of zoom/pan, so "Reset view" recenters without un-rotating.
+Quarter-turn rotation is built in. The nav carries a clockwise button (`:rotate`) and its counter-clockwise twin (`:rotate_left`); choose which show with `:nav_buttons`. Rotation is tracked separately from zoom and pan: reset view re-fits the picture and returns it to its mount-time angle (`initial_rotation`), and a double-click zooms back out without touching the rotation.
 
 ```heex
 <Fresco.viewer
   id="photo"
   src={~p"/uploads/photo.jpg"}
   class="w-full h-[80vh] rounded"
-  rotate
+  initial_rotation={@photo.rotation}
+  persist_rotation
 />
 ```
 
-Default is `rotate={false}` — every existing viewer keeps the stock four-button layout.
+- `:initial_rotation` (0 / 90 / 180 / 270) paints the first frame already rotated — no flash of the unrotated picture.
+- `:persist_rotation` pushes a `"fresco:rotate"` event (`%{"id", "rotation", "previous"}`) to the owning LiveView on every change, so you can save it.
+- From JS: `handle.setRotation(deg)`, `handle.rotateBy(±90)`, `handle.rotateRight()`, `handle.rotateLeft()`, `handle.getRotation()`.
+
+---
+
+## The nav on small screens
+
+A column of buttons down the left edge is fine on a desktop and runs most of the way down a phone's picture. Fresco gives you a few dials:
+
+- **`nav_layout: :row`** — the buttons line up along the top instead.
+- **It always fits.** In either layout, buttons that don't fit move behind a "more" (⋯) button at the end and come back when there's room — a phone turned sideways, a split view dragged wider. Built-ins give up their place in this order: fullscreen, rotate left, rotate right, zoom out, zoom in, reset view. Buttons an extension added never move.
+- **`nav_overflow`** — built-ins that always live behind ⋯, for a short row of the basics: `nav_overflow={[:fullscreen, :rotate_left, :home]}`.
+- **`nav_reverse`** — with a row, mirror it: the first buttons sit nearest the middle of the viewer and ⋯ out in the corner.
+- **`--fresco-nav-reserve-end`** — a CSS custom property, set on any ancestor, for how much of the top edge your own chrome takes at the far end (a close button, say). The row stops short of it.
+
+```heex
+<Fresco.canvas id="board" canvas={@canvas} nav_layout={:row} nav_reverse nav_overflow={[:fullscreen, :home]} />
+```
+
+---
+
+## Gestures and events worth knowing
+
+- **Two fingers on a trackpad pan** the view, the way they scroll a page. The browser reports them after the OS's own scroll-direction setting, so no default suits every laptop: `invert_two_finger_pan` (or `handle.setTwoFingerPanInverted(true)`) flips it — typically fed from a per-user preference.
+- **Swipe between pictures.** A one-finger swipe across a picture at its fitted view fires `swipe` (`%{direction: "left" | "right"}`) on the handle and a bubbling `fresco:swipe` DOM event on the viewer element — your cue to show the next or previous one. Zoomed in, the same drag is a pan and is never announced. Touch and pen only.
+- **`:gestures`** is an allowlist (`[:pan, :pinch, :wheel, :double_click, :keyboard, :swipe]`) for hosts that want fewer.
+- **`pan_locked`** frees the left drag for something else (a drawing tool) while middle-drag, pinch and two-finger pan still move the view.
 
 ---
 
@@ -400,7 +277,7 @@ The `[data-fresco-theme="inherit"]` selector matches Fresco's other theme branch
 
 ## Use it as a foundation for extensions
 
-Fresco publishes each live viewer to `window.Fresco.viewerFor(domId)`. Peer libraries (Tessera for deep zoom, future Etcher for annotations, etc.) look up the handle and attach without forking the viewer.
+Fresco publishes each live viewer to `window.Fresco.viewerFor(domId)`. Peer libraries ([Etcher](https://hex.pm/packages/etcher) for annotations, [Tessera](https://hex.pm/packages/tessera) for progressive quality, etc.) look up the handle and attach without forking the viewer.
 
 ```js
 // In another LiveView hook on the same page:
@@ -421,51 +298,22 @@ window.Fresco.onViewerReady("photo", function(handle) {
 });
 ```
 
-### Advanced: OSD escape hatch
+### Adding nav buttons
 
-Fresco's handle exposes the underlying OpenSeadragon Viewer instance at `handle.openSeadragon`. Use this when you need an OSD API that Fresco doesn't surface first-class — pan/zoom constraints, raw event handlers (`canvas-double-click`, `canvas-key`, …), OSD plugin registration, gesture rebinding, etc.
-
-```js
-window.Fresco.onViewerReady("photo", function(handle) {
-  // Disable panning entirely (e.g., for a reader pinned at fit-zoom):
-  handle.openSeadragon.panHorizontal = false;
-  handle.openSeadragon.panVertical = false;
-
-  // Listen to OSD events Fresco doesn't bridge:
-  handle.openSeadragon.addHandler("canvas-double-click", function(e) {
-    // your custom double-click behavior
-  });
-
-  // Override OSD constraints after mount:
-  handle.openSeadragon.viewport.minZoomImageRatio = 1.0;
-});
-```
-
-#### The contract
-
-- `handle.openSeadragon` is a real, current OpenSeadragon Viewer — anything in the [OSD API docs](https://openseadragon.github.io/docs/) works.
-- Reaching for the escape hatch couples your code to **OSD's API and version**, not just Fresco's. If we ever swap the underlying engine, escape-hatch consumers will need to migrate.
-- Fresco pins the OSD CDN version — see `OSD_VERSION` in `priv/static/fresco.js`. The CHANGELOG flags any OSD version bump.
-- **If you find yourself reaching for the escape hatch routinely, file an issue.** Common patterns should become first-class Fresco APIs.
-
-#### `handle.viewer` (back-compat alias)
-
-`handle.viewer` is the original name for this field — it has existed (undocumented) since Fresco's first release, and [Etcher](https://hex.pm/packages/etcher) already depends on it in production. It's retained indefinitely as a back-compat alias for `handle.openSeadragon`. New code should prefer `openSeadragon` — it disambiguates from "the Fresco viewer" (the component / handle itself, the colloquial referent in Fresco's own docs) and signals that you're crossing into OSD territory.
-
----
+`handle.appendNavButton(svg, title, onClick, opts)` adds a button to the viewer's nav and returns a remover (with `.setIcon`, `.setTitle` and `.el`). Pass `{ slot: n }` to put it at the start of the nav instead of the end, ordered by slot — so an extension's main control leads the row whichever script attached first. Etcher's pencil, style-panel switch and eye use slots 0, 1 and 2.
 
 ### Source providers
 
-Override Fresco's default "treat the URL as a plain image" behavior for specific URL patterns:
+Override how Fresco treats a source URL for specific patterns. The factory returns a source descriptor; the engine renders `{type: "image", url}` (an ordinary image), which is also the default for every URL:
 
 ```js
 window.Fresco.registerSourceProvider(
-  function(url) { return url.toLowerCase().endsWith(".dzi"); },
-  function(url) { return url; }    // OSD takes a DZI URL directly
+  function(url) { return url.startsWith("/private/"); },
+  function(url) { return { type: "image", url: url + "?signed=" + token }; }
 );
 ```
 
-This is how Tessera (the deep-zoom layer that builds on Fresco) attaches: it registers a `.dzi` source provider so DZI manifests automatically trigger tile loading.
+Any other `type` throws a clear error rather than failing silently — the engine draws images, not tile pyramids.
 
 ---
 
@@ -473,8 +321,9 @@ This is how Tessera (the deep-zoom layer that builds on Fresco) attaches: it reg
 
 Fresco is the foundation. Related published packages:
 
-- **[`tessera`](https://hex.pm/packages/tessera)** — deep zoom for very high-resolution images via DZI tile pyramids. Built on Fresco.
-- **Etcher** *(planned)* — annotation + markup tools (drawing, arrows, text, comment threads on regions of an image). Will build on Fresco.
+- **[`etcher`](https://hex.pm/packages/etcher)** — annotation and markup tools (shapes, arrows, callouts, text, freehand) drawn on a `<Fresco.canvas>`; annotations live in the canvas's `extensions` map.
+- **[`tessera`](https://hex.pm/packages/tessera)** — multi-resolution, progressive-quality layer: swaps to sharper sources as the user zooms in. See its README for tiling.
+- **[`fresco_strip`](https://hex.pm/packages/fresco_strip)** — long-scroll reading over a stack of images.
 
 You can use Fresco entirely on its own; you don't need any of the related packages.
 

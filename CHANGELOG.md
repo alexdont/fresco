@@ -4,6 +4,21 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Docs
+
+- **The README describes the engine Fresco actually has.** Large parts of
+  it still documented the OpenSeadragon-based viewer that 0.5.0 replaced —
+  OpenSeadragon "lazy-loaded from jsDelivr", a `handle.openSeadragon`
+  escape hatch, `pan_optimized` / `fast-pan`, a `:sources` attr on
+  `<Fresco.viewer>`, `<Fresco.scroll_strip>` and a `rotate` attr — so
+  anyone reading it (or summarising it) concluded Fresco was built on
+  OpenSeadragon. Rewritten: how the CSS-transform engine works,
+  `<Fresco.canvas>` for multiple images, rotation, the nav on small
+  screens, gestures and events, nav-button slots, source providers, and
+  the related packages. `:swipe` added to the `:gestures` docs.
+
 ## 0.13.3 — 2026-10-09
 
 A viewer whose controls fit a phone: the nav can be a short row along the
