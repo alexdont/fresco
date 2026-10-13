@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Added
+
+- **`actual_size`** on `<Fresco.viewer>` and `<Fresco.canvas>` — zoom in
+  real pixels, the way a photo app does. 100% is one natural pixel per
+  *physical* screen pixel (half a CSS pixel on a 2× display). A picture
+  opens at fit or 100%, whichever is smaller, so a small one shows at its
+  real size instead of blown up and blurred to fill the viewer; reset
+  view, a double tap's way out and the swipe's "fully zoomed out" follow
+  that opening view, and the zoom-out floor never stops short of it. An
+  "actual size" nav button (a magnifier with a 1, between zoom out and
+  zoom in, also the `1` key) goes to 100% and from 100% to fit. A
+  percentage pill shows at the top centre while the zoom changes. At
+  exactly 100% the picture is painted on whole screen pixels, so
+  centring cannot smear it across two.
+- **`handle.getZoomPercent()`**, **`toggleActualSize()`**,
+  **`zoomToActualSize()`** and **`fitToView()`**; the `zoom` event carries
+  `percent` alongside `scale`. `:actual_size` joins the `nav_buttons`
+  names.
+
 ### Docs
 
 - **The README describes the engine Fresco actually has.** Large parts of

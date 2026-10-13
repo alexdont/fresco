@@ -16,8 +16,8 @@ defmodule Fresco.SwipeTest do
 
   alias Fresco.Test.PointerHarness, as: H
 
-  # sFit equal to the scale: the picture is at its fitted view.
-  @at_fit [claimed: false, s_fit: 1]
+  # sHome equal to the scale: the picture is at its home (fully zoomed-out) view.
+  @at_fit [claimed: false, s_home: 1]
 
   defp swipes(out) do
     for %{"event" => "swipe", "detail" => %{"direction" => d}} <- out["log"], do: d
@@ -40,7 +40,7 @@ defmodule Fresco.SwipeTest do
   end
 
   test "zoomed in, the drag is a pan and nothing else" do
-    out = H.press([H.down(1, 300, 200), H.up_at(1, 150, 200)], claimed: false, s_fit: 0.5)
+    out = H.press([H.down(1, 300, 200), H.up_at(1, 150, 200)], claimed: false, s_home: 0.5)
     assert swipes(out) == []
   end
 
@@ -70,7 +70,7 @@ defmodule Fresco.SwipeTest do
   end
 
   test "a finger an overlay claimed (a pen stroke) is not a swipe" do
-    out = H.press([H.down(1, 300, 200), H.up_at(1, 100, 200)], claimed: true, s_fit: 1)
+    out = H.press([H.down(1, 300, 200), H.up_at(1, 100, 200)], claimed: true, s_home: 1)
     assert swipes(out) == []
   end
 

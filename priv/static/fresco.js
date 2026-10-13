@@ -187,6 +187,10 @@
     // and the loop spins CCW. A guaranteed visual mirror of the CW button
     // rather than a hand-drawn second glyph.
     rotateLeft: '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><g transform="matrix(-1 0 0 1 24 0)"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path stroke-linecap="round" stroke-linejoin="round" d="M21 3v5h-5"/></g></svg>',
+    // "Actual size": the zoom glass with a 1 in it, after the photo apps —
+    // one image pixel to one screen pixel. Same lens as zoom in / out, so
+    // the three read as one family: − 1 +.
+    actualSize: '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607ZM9.25 8.5l1.5-1.25v6.5"/></svg>',
     // Heroicons `ellipsis-horizontal` — the nav's overflow: the buttons
     // that did not fit wait behind it.
     more: '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 12a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0ZM12.75 12a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0ZM18.75 12a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z"/></svg>'
@@ -276,6 +280,23 @@
       "  outline: 2px solid var(--fresco-nav-focus); outline-offset: 1px;",
       "}",
       ".fresco-nav svg { width: 18px; height: 18px; }",
+
+      // ── Zoom percentage (`actual_size`) ─────────────────────────────────
+      // Top centre, under a row nav (beside a column one). Not the bottom:
+      // that is where drawing toolbars live (Etcher's sits there on a
+      // phone, and the pill landed on it), and a host's side arrows are at
+      // mid-height. Dark whatever the theme: it sits on the picture.
+      ".fresco-zoom-pill {",
+      "  position: absolute; left: 50%; top: 16px; z-index: 10;",
+      "  transform: translateX(-50%);",
+      "  padding: 4px 10px; border-radius: 999px;",
+      "  background: var(--fresco-zoom-pill-bg, rgba(0, 0, 0, 0.6)); color: #fff;",
+      "  font: 600 13px/1.25 system-ui, -apple-system, sans-serif;",
+      "  font-variant-numeric: tabular-nums;",
+      "  pointer-events: none; opacity: 0; transition: opacity 300ms ease;",
+      "}",
+      ".fresco-zoom-pill[data-layout=\"row\"] { top: 60px; }",
+      ".fresco-zoom-pill[data-shown] { opacity: 1; transition-duration: 80ms; }",
 
       // ── Host theming ────────────────────────────────────────────────────
       ".fresco-viewer:not([data-fresco-theme=\"inherit\"]) {",
@@ -667,6 +688,11 @@
     }
     if (enabled("fullscreen")) add("fullscreen", ICONS.expand, "Toggle fullscreen", handlers.onFullscreen);
     if (enabled("zoom_in"))    add("zoom_in", ICONS.zoomIn, "Zoom in", handlers.onZoomIn);
+    // Between the two zooms, so a mirrored row reads − 1 + and a column
+    // + 1 −. Only for a host that zooms in real pixels (`actual_size`).
+    if (enabled("actual_size") && handlers.onActualSize) {
+      add("actual_size", ICONS.actualSize, "Actual size (100%)", handlers.onActualSize);
+    }
     if (enabled("zoom_out"))   add("zoom_out", ICONS.zoomOut, "Zoom out", handlers.onZoomOut);
     // `rotate` is the original clockwise button (+90); `rotate_left` is the
     // counter-clockwise twin (-90), rendered just before it so the pair reads
@@ -691,7 +717,7 @@
   // view" are what is left on the smallest screens, beside whatever an
   // extension added (Etcher's pencil and eye), which never move — a host
   // that put a button there wants it seen.
-  var NAV_COLLAPSE = ["fullscreen", "rotate_left", "rotate", "zoom_out", "zoom_in", "home"];
+  var NAV_COLLAPSE = ["fullscreen", "rotate_left", "rotate", "actual_size", "zoom_out", "zoom_in", "home"];
 
   // Fits the nav to the room it has. Whatever does not fit moves into a
   // popover behind a "more" button at the end, and moves back as the room
@@ -868,6 +894,7 @@
     if (!isNaN(ceil) && ceil > 0) opts.zoomCeiling = ceil;
     if (el.dataset.panLocked === "true") opts.panLocked = true;
     if (el.dataset.invertTwoFingerPan === "true") opts.invertTwoFingerPan = true;
+    if (el.dataset.actualSize === "true") opts.actualSize = true;
     if (el.dataset.navLayout === "row") opts.navLayout = "row";
     if (el.dataset.navReverse === "true") opts.navReverse = true;
     if (el.dataset.navOverflow) {
@@ -933,6 +960,10 @@
     var initialZoomCeiling = opts.zoomCeiling;
     var initialPanLocked   = !!opts.panLocked;
     var initialInvertTwoFingerPan = !!opts.invertTwoFingerPan;
+    // Zoom in real pixels (`actual_size`): 100% is one natural pixel per
+    // physical screen pixel, and the home view is fit or 100%, whichever
+    // is smaller — see `sHome`.
+    var actualSize = !!opts.actualSize;
     var initialGestures    = opts.gestures;     // array or undefined
     var initialNavButtons  = opts.navButtons;   // array or undefined
     var initialRotation    = opts.rotation;     // number or undefined
@@ -957,6 +988,12 @@
     var nw = 0, nh = 0;          // natural extent (image natural for viewer; canvas dims for canvas)
     var vw = 0, vh = 0;          // viewport
     var sFit = 1, sMin = 1, sMax = 8;
+    // The scale "home" means: where the picture opens, where reset view and
+    // a double tap's way out land, and what counts as fully zoomed out for a
+    // swipe. sFit, unless the host zooms in real pixels — then a picture
+    // smaller than the viewer stays at its real size (sActual) instead of
+    // being blown up, blurred, to fill it.
+    var sHome = 1;
     var frameRequested = false;
     var ready = false;
     var bus = createEventBus();
@@ -1025,6 +1062,14 @@
       }
     }
 
+    // The scale at which one natural pixel covers one PHYSICAL screen pixel:
+    // what "100%" means. Read fresh each time, because devicePixelRatio
+    // moves — a window dragged to another monitor, the browser zoomed.
+    function sActual() {
+      var d = (typeof window !== "undefined" && window.devicePixelRatio) || 1;
+      return 1 / d;
+    }
+
     function recomputeBounds() {
       var eff = effectiveNaturalSize();
       if (eff.w > 0 && eff.h > 0 && vw > 0 && vh > 0) {
@@ -1032,8 +1077,12 @@
       } else {
         sFit = 1;
       }
-      var defaultSMin = infiniteCanvas ? sFit * 0.05 : sFit;
+      sHome = actualSize ? Math.min(sFit, sActual()) : sFit;
+      var defaultSMin = infiniteCanvas ? sHome * 0.05 : sHome;
       sMin = (typeof customSMin === "number") ? customSMin : defaultSMin;
+      // The home view is always reachable, whatever floor a host or peer
+      // set — Etcher's floor, for one, is worked out from the fitted view.
+      if (actualSize && sMin > sHome) sMin = sHome;
       // Cap on the rendered CSS size in either axis. Most browsers
       // refuse to lay out elements larger than ~32767 px (signed
       // 16-bit); we use 30000 as a safe floor across Chrome / Safari
@@ -1129,9 +1178,18 @@
       clampPan();
     }
 
-    function fit() {
+    // Home: the scale in `sHome`, centred. Named for what it did before
+    // `actual_size` existed, when home and fit were the same thing.
+    function fit() { frameAt(function() { return sHome; }); }
+
+    // Fit the whole picture to the viewer, even when home is smaller.
+    function fitToView() { frameAt(function() { return sFit; }); }
+
+    // `scale` is a function because refresh() is what works the numbers
+    // out, and it has to run first.
+    function frameAt(scale) {
       refresh();
-      s = sFit;
+      s = scale();
       // Center the rotated bbox in the viewport. For rot=0 this
       // reduces to the previous formula; for 90 / 180 / 270 the
       // bbox extents are different and we'd otherwise frame the
@@ -1153,7 +1211,7 @@
       ty = py - (py - ty) * kEff;
       s = s2;
       clampPan();
-      bus._emit("zoom", { scale: s });
+      emitZoom();
       requestFrame();
     }
 
@@ -1245,7 +1303,7 @@
           tx = targetTx; ty = targetTy; s = clampedTargetS;
           clampPan();
           apply();
-          bus._emit("zoom", { scale: s });
+          emitZoom();
           anim = null;
           return;
         }
@@ -1256,13 +1314,24 @@
 
     function apply() {
       applyChildren(s);
+      // At exactly 100%, land the picture on whole screen pixels: centring
+      // can leave it half a pixel off, and the browser would then smear
+      // every pixel across two — the opposite of what 100% is for. Only
+      // the painted position snaps; tx/ty stay exact.
+      var ptx = tx, pty = ty;
+      if (actualSize && atScale(sActual())) {
+        var d = 1 / sActual();
+        ptx = Math.round(tx * d) / d;
+        pty = Math.round(ty * d) / d;
+      }
       // `translate3d(tx, ty, 0) rotate(rot deg)` — CSS reads right-
       // to-left, so rotate happens first (around the stage's own
       // 0,0 origin) then translate moves the rotated content into
       // place. Matches the image-pixel math in `rotatedContentBBox`
       // / `imageToScreen`.
       stage.style.transform =
-        "translate3d(" + tx + "px, " + ty + "px, 0) rotate(" + rot + "deg)";
+        "translate3d(" + ptx + "px, " + pty + "px, 0) rotate(" + rot + "deg)";
+      showZoom();
       bus._emit("animation", { tx: tx, ty: ty, scale: s, rotation: rot });
       bus._emit("update-viewport", { tx: tx, ty: ty, scale: s, rotation: rot });
     }
@@ -1384,7 +1453,7 @@
       try { el.setPointerCapture(e.pointerId); } catch (_) {}
       if (pointers.size === 0) {
         swipe = isMouse ? null : {
-          x: e.clientX, y: e.clientY, t: Date.now(), atFit: s <= sFit * DBL_ZOOMED
+          x: e.clientX, y: e.clientY, t: Date.now(), atFit: s <= sHome * DBL_ZOOMED
         };
       } else {
         swipe = null;   // a second finger: a pinch, not a swipe
@@ -1452,7 +1521,7 @@
 
         tx = newTx; ty = newTy; s = s2;
         clampPan();
-        bus._emit("zoom", { scale: s });
+        emitZoom();
         bus._emit("pan", { tx: tx, ty: ty });
         requestFrame();
       }
@@ -1468,7 +1537,7 @@
     // read as "next".
     function endSwipe(e) {
       var sw = swipe;
-      if (!sw || !sw.atFit || s > sFit * DBL_ZOOMED) return;
+      if (!sw || !sw.atFit || s > sHome * DBL_ZOOMED) return;
       if (!gestureEnabled("swipe")) return;
       var dx = e.clientX - sw.x;
       var dy = e.clientY - sw.y;
@@ -1770,7 +1839,7 @@
       if (isFromNav(e)) return;
       if (!gestureEnabled("double_click")) return;
       cancelAnimation();
-      if (s > sFit * DBL_ZOOMED) {
+      if (s > sHome * DBL_ZOOMED) {
         requestHome();
         return;
       }
@@ -1791,6 +1860,10 @@
         case "+": case "=": zoomAt(vw / 2, vh / 2, 1.4); break;
         case "-": case "_": zoomAt(vw / 2, vh / 2, 1 / 1.4); break;
         case "0": resetView(); break;
+        case "1":
+          if (!actualSize) { handled = false; break; }
+          toggleActualSize();
+          break;
         case "f": case "F": toggleFullscreen(); break;
         default: handled = false;
       }
@@ -1821,6 +1894,86 @@
       zoomAt(vw / 2, vh / 2, 1 / (factor || 1.4));
     }
 
+    // ── Actual size ────────────────────────────────────────────────────────
+    // Within 1% counts as there: a pinch that lands at 99.6% is at 100% as
+    // far as the button is concerned.
+    function atScale(target) { return Math.abs(s / target - 1) < 0.01; }
+
+    function zoomPercent() { return (s / sActual()) * 100; }
+
+    // To 100%, about the middle of the viewer.
+    function zoomToActualSize() {
+      cancelAnimation();
+      refresh();
+      zoomAt(vw / 2, vh / 2, sActual() / s);
+    }
+
+    // The nav's magnifier-with-a-1: to 100%, and from 100% to fit. For a
+    // big picture that is home and back; for one smaller than the viewer,
+    // home already IS 100%, so the button is how it fills the view.
+    function toggleActualSize() {
+      cancelAnimation();
+      refresh();
+      if (!atScale(sActual())) {
+        zoomToActualSize();
+        return;
+      }
+      if (atScale(sHome)) fitToView();
+      else requestHome();
+      emitZoom();
+    }
+
+    function emitZoom() { bus._emit("zoom", { scale: s, percent: zoomPercent() }); }
+
+    // The percentage, shown at the bottom of the viewer while the zoom
+    // changes and faded out a moment after it stops — the photo apps' way.
+    // Fed from apply(), so every path that changes the scale (wheel, pinch,
+    // buttons, a host's setTransform, a resize) shows it.
+    var zoomPill = null, pillScale = null, pillTimer = null;
+    var PILL_HOLD_MS = 1200;
+    if (actualSize && typeof document !== "undefined") {
+      zoomPill = document.createElement("div");
+      zoomPill.className = "fresco-zoom-pill";
+      zoomPill.setAttribute("aria-hidden", "true");
+      el.appendChild(zoomPill);
+    }
+
+    function formatPercent(p) {
+      if (p >= 10) return Math.round(p) + "%";
+      var one = p.toFixed(1);
+      if (one === "0.0") return "<0.1%";
+      return one.replace(/\.0$/, "") + "%";
+    }
+
+    function showZoom() {
+      if (!zoomPill || !ready || s === pillScale) return;
+      pillScale = s;
+      zoomPill.textContent = formatPercent(zoomPercent());
+      // Follows the nav, which a host may switch at runtime.
+      zoomPill.setAttribute("data-layout", (navEl && navEl.getAttribute("data-layout")) || "column");
+      zoomPill.setAttribute("data-shown", "");
+      if (pillTimer) clearTimeout(pillTimer);
+      pillTimer = setTimeout(function() {
+        pillTimer = null;
+        zoomPill.removeAttribute("data-shown");
+      }, PILL_HOLD_MS);
+      syncActualButton();
+    }
+
+    // The button says where it will go: to 100%, or (at 100%) to fit.
+    function syncActualButton() {
+      var btn = navEl && navEl.querySelector && (navEl.querySelector('[data-fresco-nav="actual_size"]') ||
+        (navEl.parentNode && navEl.parentNode.querySelector('.fresco-nav-overflow [data-fresco-nav="actual_size"]')));
+      if (!btn) return;
+      var at = atScale(sActual());
+      var title = at ? "Fit to screen" : "Actual size (100%)";
+      if (btn.title !== title) {
+        btn.title = title;
+        btn.setAttribute("aria-label", title);
+      }
+      btn.setAttribute("aria-pressed", at ? "true" : "false");
+    }
+
     // ── Listeners + nav + resize ───────────────────────────────────────────
     el.addEventListener("pointerdown", onPointerDown);
     // Middle-click's own defaults, which would otherwise land at the end of
@@ -1849,6 +2002,7 @@
         vw = rect.width; vh = rect.height;
         zoomAt(vw / 2, vh / 2, 1 / 1.4);
       },
+      onActualSize: actualSize ? toggleActualSize : null,
       onRotate: function() { rotateBy(90); },
       onRotateLeft: function() { rotateBy(-90); },
       onFullscreen: toggleFullscreen
@@ -1891,6 +2045,8 @@
       }
       if (navEl && navEl._frescoNav) navEl._frescoNav.teardown();
       if (navEl && navEl.parentNode) navEl.parentNode.removeChild(navEl);
+      if (pillTimer) { clearTimeout(pillTimer); pillTimer = null; }
+      if (zoomPill && zoomPill.parentNode) zoomPill.parentNode.removeChild(zoomPill);
     }
 
     // Override the engine's sMin (the zoom-out floor). Pass a positive
@@ -1905,7 +2061,7 @@
       if (s < sMin) {
         s = sMin;
         clampPan();
-        bus._emit("zoom", { scale: s });
+        emitZoom();
         requestFrame();
       }
     }
@@ -1917,7 +2073,7 @@
       if (s > sMax) {
         s = sMax;
         clampPan();
-        bus._emit("zoom", { scale: s });
+        emitZoom();
         requestFrame();
       }
     }
@@ -2101,6 +2257,12 @@
       // requestHome flows through any active `customHome`).
       zoomIn: zoomIn,
       zoomOut: zoomOut,
+      // The zoom in real pixels: 100 = one natural pixel per physical
+      // screen pixel. Meaningful whether or not `actual_size` is on.
+      getZoomPercent: zoomPercent,
+      zoomToActualSize: zoomToActualSize,
+      toggleActualSize: toggleActualSize,
+      fitToView: fitToView,
       toggleFullscreen: toggleFullscreen,
       requestHome: requestHome,
       setEnabledGestures: setEnabledGestures,
@@ -2147,6 +2309,7 @@
       zoomCeiling: attrOpts.zoomCeiling,
       panLocked: attrOpts.panLocked,
       invertTwoFingerPan: attrOpts.invertTwoFingerPan,
+      actualSize: attrOpts.actualSize,
       navLayout: attrOpts.navLayout,
       navOverflow: attrOpts.navOverflow,
       navReverse: attrOpts.navReverse,
@@ -2304,6 +2467,10 @@
       setRotation: engine.setRotation,
       getRotation: engine.getRotation,
       rotateBy: engine.rotateBy,
+      getZoomPercent: engine.getZoomPercent,
+      zoomToActualSize: engine.zoomToActualSize,
+      toggleActualSize: engine.toggleActualSize,
+      fitToView: engine.fitToView,
       setSource: setSource,
       swapSourcePreservingBounds: swapSourcePreservingBounds,
       teardown: engine.teardown
@@ -2411,6 +2578,11 @@
       fitBounds: fitBounds,
       setSource: function(url) { controller.setSource(url); },
       swapSourcePreservingBounds: function(url) { controller.swapSourcePreservingBounds(url); },
+      // Zoom in real pixels (`actual_size`) — as on the canvas handle.
+      getZoomPercent:   function() { return controller.getZoomPercent(); },
+      zoomToActualSize: function() { controller.zoomToActualSize(); },
+      toggleActualSize: function() { controller.toggleActualSize(); },
+      fitToView:        function() { controller.fitToView(); },
       // Opt-in zoom + pan constraint controls (0.5.1+). All three are
       // no-ops at their defaults (null / null / false), so existing
       // consumers see identical behavior unless they call these. See
@@ -2566,6 +2738,7 @@
       zoomCeiling: canvasAttrOpts.zoomCeiling,
       panLocked: canvasAttrOpts.panLocked,
       invertTwoFingerPan: canvasAttrOpts.invertTwoFingerPan,
+      actualSize: canvasAttrOpts.actualSize,
       navLayout: canvasAttrOpts.navLayout,
       navOverflow: canvasAttrOpts.navOverflow,
       navReverse: canvasAttrOpts.navReverse,
@@ -3167,6 +3340,10 @@
       zoomOut: engine.zoomOut,
       toggleFullscreen: engine.toggleFullscreen,
       requestHome: engine.requestHome,
+      getZoomPercent: engine.getZoomPercent,
+      zoomToActualSize: engine.zoomToActualSize,
+      toggleActualSize: engine.toggleActualSize,
+      fitToView: engine.fitToView,
       setImageVisible: setImageVisible,
       getHiddenImageIds: getHiddenImageIds,
       setMemoryWindow: setMemoryWindow,
@@ -3379,6 +3556,13 @@
       zoomOut:          function(f) { controller.zoomOut(f); },
       toggleFullscreen: function()  { controller.toggleFullscreen(); },
       requestHome:      function()  { controller.requestHome(); },
+      // Zoom in real pixels (`actual_size`): 100 = one natural pixel per
+      // physical screen pixel; the button's to-100%-and-back; fit whatever
+      // home is.
+      getZoomPercent:   function()  { return controller.getZoomPercent(); },
+      zoomToActualSize: function()  { controller.zoomToActualSize(); },
+      toggleActualSize: function()  { controller.toggleActualSize(); },
+      fitToView:        function()  { controller.fitToView(); },
       // 0.5.2+ view-tracking — emits "view-focus" / "view-blur" on
       // the bus when the dominant image changes. Default off; enable
       // explicitly to start.

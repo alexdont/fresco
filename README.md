@@ -176,12 +176,29 @@ Quarter-turn rotation is built in. The nav carries a clockwise button (`:rotate`
 
 ---
 
+## Real pixels — `actual_size`
+
+By default a picture is fitted to the viewer, however big or small it is. A photo app does something better, and `actual_size` turns it on:
+
+- **100% means one image pixel per physical screen pixel.** On a 2× (Retina) display that is half a CSS pixel, so 100% really does line the picture's pixels up with the screen's.
+- **A picture opens at fit or at 100%, whichever is smaller.** A 4K photo on a laptop opens fitted (and reads something like 23%); a 50×50 icon opens at its real size, small and sharp, instead of blown up and blurred to fill the view. You can still zoom it in. Reset view, a double tap's way back out, and the swipe's "fully zoomed out" all mean that opening view.
+- **An "actual size" button** — a magnifier with a 1 — sits between zoom out and zoom in (− 1 +). It goes to 100%, and from 100% to fit. The `1` key does the same.
+- **The percentage** shows in a small pill at the top centre while the zoom changes, and fades out a moment after.
+
+```heex
+<Fresco.viewer id="photo" src={@url} actual_size />
+```
+
+100% is measured in natural pixels for `<Fresco.viewer>` and in canvas units for `<Fresco.canvas>` — so lay a canvas out in the source image's own pixels (an image `width` equal to the file's width), even while a smaller copy is what loads, and the numbers read true. `handle.getZoomPercent()` reads it; `handle.toggleActualSize()`, `handle.zoomToActualSize()` and `handle.fitToView()` drive it; and the `zoom` event carries `percent` alongside `scale`.
+
+---
+
 ## The nav on small screens
 
 A column of buttons down the left edge is fine on a desktop and runs most of the way down a phone's picture. Fresco gives you a few dials:
 
 - **`nav_layout: :row`** — the buttons line up along the top instead.
-- **It always fits.** In either layout, buttons that don't fit move behind a "more" (⋯) button at the end and come back when there's room — a phone turned sideways, a split view dragged wider. Built-ins give up their place in this order: fullscreen, rotate left, rotate right, zoom out, zoom in, reset view. Buttons an extension added never move.
+- **It always fits.** In either layout, buttons that don't fit move behind a "more" (⋯) button at the end and come back when there's room — a phone turned sideways, a split view dragged wider. Built-ins give up their place in this order: fullscreen, rotate left, rotate right, actual size, zoom out, zoom in, reset view. Buttons an extension added never move.
 - **`nav_overflow`** — built-ins that always live behind ⋯, for a short row of the basics: `nav_overflow={[:fullscreen, :rotate_left, :home]}`.
 - **`nav_reverse`** — with a row, mirror it: the first buttons sit nearest the middle of the viewer and ⋯ out in the corner.
 - **`--fresco-nav-reserve-end`** — a CSS custom property, set on any ancestor, for how much of the top edge your own chrome takes at the far end (a close button, say). The row stops short of it.
@@ -195,7 +212,7 @@ A column of buttons down the left edge is fine on a desktop and runs most of the
 ## Gestures and events worth knowing
 
 - **Two fingers on a trackpad pan** the view, the way they scroll a page. The browser reports them after the OS's own scroll-direction setting, so no default suits every laptop: `invert_two_finger_pan` (or `handle.setTwoFingerPanInverted(true)`) flips it — typically fed from a per-user preference.
-- **Swipe between pictures.** A one-finger swipe across a picture at its fitted view fires `swipe` (`%{direction: "left" | "right"}`) on the handle and a bubbling `fresco:swipe` DOM event on the viewer element — your cue to show the next or previous one. Zoomed in, the same drag is a pan and is never announced. Touch and pen only.
+- **Swipe between pictures.** A one-finger swipe across a picture at its fitted view (its opening view, under `actual_size`) fires `swipe` (`%{direction: "left" | "right"}`) on the handle and a bubbling `fresco:swipe` DOM event on the viewer element — your cue to show the next or previous one. Zoomed in, the same drag is a pan and is never announced. Touch and pen only.
 - **`:gestures`** is an allowlist (`[:pan, :pinch, :wheel, :double_click, :keyboard, :swipe]`) for hosts that want fewer.
 - **`pan_locked`** frees the left drag for something else (a drawing tool) while middle-drag, pinch and two-finger pan still move the view.
 

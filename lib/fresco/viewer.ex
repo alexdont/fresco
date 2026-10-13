@@ -169,6 +169,31 @@ defmodule Fresco.Viewer do
     """
   )
 
+  attr(:actual_size, :boolean,
+    default: false,
+    doc: """
+    Zoom in real pixels, the way a photo app does. When `true`:
+
+    - **100% means one image pixel per screen pixel** — physical pixels, so
+      on a 2× (Retina) display it is half as many CSS pixels.
+    - **The picture opens at fit or at 100%, whichever is smaller.** A big
+      photo opens fitted, as ever; one smaller than the viewer opens at its
+      real size, centred, instead of blown up and blurred to fill the view.
+      "Reset view", a double tap's way back out and the swipe's "fully
+      zoomed out" all mean that view, and zooming out may reach it.
+    - **An "actual size" button** (a magnifier with a 1) joins the nav
+      between zoom out and zoom in: to 100%, and from 100% to fit.
+      The `1` key does the same.
+    - **A percentage pill** shows the zoom at the top of the viewer while
+      it changes, and fades away a moment after.
+
+    100% is measured against the image's natural size — the loaded file's
+    own pixels. Read the zoom with
+    `handle.getZoomPercent()`; drive the button with
+    `handle.toggleActualSize()` or `handle.zoomToActualSize()`.
+    """
+  )
+
   attr(:invert_two_finger_pan, :boolean,
     default: false,
     doc: """
@@ -201,7 +226,8 @@ defmodule Fresco.Viewer do
     default: nil,
     doc: """
     Allowlist of enabled built-in nav buttons. Atom list:
-    `[:home, :zoom_in, :zoom_out, :rotate, :rotate_left, :fullscreen]`.
+    `[:home, :zoom_in, :zoom_out, :actual_size, :rotate, :rotate_left, :fullscreen]`
+    (`:actual_size` only shows with `actual_size: true`).
 
     `:rotate` rotates clockwise (+90); `:rotate_left` is its
     counter-clockwise twin (-90), rendered just before it.
@@ -284,6 +310,7 @@ defmodule Fresco.Viewer do
       data-zoom-ceiling={@zoom_ceiling && to_string(@zoom_ceiling)}
       data-pan-locked={@pan_locked && "true"}
       data-invert-two-finger-pan={@invert_two_finger_pan && "true"}
+      data-actual-size={@actual_size && "true"}
       data-nav-layout={@nav_layout == :row && "row"}
       data-nav-reverse={@nav_reverse && "true"}
       data-nav-overflow={@nav_overflow != [] && Enum.map_join(@nav_overflow, ",", &to_string/1)}

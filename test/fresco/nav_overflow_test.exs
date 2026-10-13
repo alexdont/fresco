@@ -28,7 +28,7 @@ defmodule Fresco.NavOverflowTest do
     binary_part(rest, 0, :binary.match(rest, "\n  }") |> elem(0)) <> "\n  }"
   end
 
-  defp run(script, build_opts \\ ~s({"layout": "row"})) do
+  defp run(script, build_opts \\ ~s({"layout": "row"}), extra_handlers \\ "") do
     src = File.read!(@source)
     [collapse] = Regex.run(~r/  var NAV_COLLAPSE = \[[^\]]*\];/, src)
 
@@ -88,7 +88,7 @@ defmodule Fresco.NavOverflowTest do
     function flush() { while (pending.length) pending.shift()(); }
     var ResizeObserver = undefined;
     function injectStyles() {}
-    var ICONS = { expand: "", zoomIn: "", zoomOut: "", rotate: "", rotateLeft: "", reset: "", more: "" };
+    var ICONS = { expand: "", zoomIn: "", zoomOut: "", actualSize: "", rotate: "", rotateLeft: "", reset: "", more: "" };
     #{collapse}
     #{lift(src, "  function makeButton(svg, title, onClick) {")}
     #{lift(src, "  function attachNavButton(navEl, svg, title, onClick, opts) {")}
@@ -98,7 +98,7 @@ defmodule Fresco.NavOverflowTest do
     var host = new El("div"); host.clientWidth = 800; host.clientHeight = 600;
     var noop = function() {};
     var nav = buildNav(host, { onFullscreen: noop, onZoomIn: noop, onZoomOut: noop,
-      onRotate: noop, onRotateLeft: noop, onFit: noop }, #{build_opts});
+      onRotate: noop, onRotateLeft: noop, onFit: noop#{extra_handlers} }, #{build_opts});
     var pop = host.children[1];
     function shown() {
       return nav.children.filter(function(c) { return !c.hidden; })
@@ -252,6 +252,29 @@ defmodule Fresco.NavOverflowTest do
       )
 
     assert out["reverse"] == ""
+  end
+
+  test "actual size sits between the two zooms, and gives way just before them" do
+    out =
+      run(
+        """
+        flush(); out.shown = shown();
+        ROOM = 5 * 42; nav._frescoNav.relayout(); flush(); out.five = shown();
+        ROOM = 4 * 42; nav._frescoNav.relayout(); flush(); out.four = shown(); out.waiting = waiting();
+        """,
+        ~s({"layout": "row"}),
+        ", onActualSize: noop"
+      )
+
+    assert out["shown"] == ~w(fullscreen zoom_in actual_size zoom_out rotate_left rotate home)
+    assert out["five"] == ~w(zoom_in actual_size zoom_out home more)
+    assert out["four"] == ~w(zoom_in zoom_out home more)
+    assert out["waiting"] == ~w(fullscreen actual_size rotate_left rotate)
+  end
+
+  test "no actual-size handler, no button" do
+    out = run("flush(); out.shown = shown();")
+    refute "actual_size" in out["shown"]
   end
 
   test "the default stays a column" do

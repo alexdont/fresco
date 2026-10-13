@@ -28,7 +28,7 @@ defmodule Fresco.DoubleClickTest do
 
     js = """
     var log = [];
-    var s = #{scale}, sFit = 0.5;
+    var s = #{scale}, sHome = 0.5;
     #{threshold}
     function isFromNav() { return false; }
     function gestureEnabled() { return true; }

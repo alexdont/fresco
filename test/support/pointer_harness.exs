@@ -32,7 +32,9 @@ defmodule Fresco.Test.PointerHarness do
       var panButton = 0;
       var tx = 0, ty = 0, s = 1;
       var sMin = 0.05, sMax = 40;
-      var sFit = #{Keyword.get(opts, :s_fit, 0.5)};
+      // The home view's scale — the fitted view, or 100% for a small
+      // picture under `actual_size`. What a swipe calls fully zoomed out.
+      var sHome = #{Keyword.get(opts, :s_home, 0.5)};
       var swipe = null;
       #{consts}
       var panLocked = #{Keyword.get(opts, :pan_locked, false)};
@@ -51,6 +53,7 @@ defmodule Fresco.Test.PointerHarness do
         }
       };
       var bus = { _emit: function(name, detail) { log.push({ event: name, detail: detail }); } };
+      function emitZoom() { bus._emit("zoom", { scale: s }); }
       function isFromNav() { return claimed; }
       function blocksMiddleDrag() { return blocksMiddle; }
       function cancelAnimation() {}
