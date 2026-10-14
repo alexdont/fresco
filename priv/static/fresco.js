@@ -357,6 +357,26 @@
       // boards want a plain surface — a photo to annotate, a presentation —
       // and the dots read as noise over the top of those.
       ".fresco-viewer.fresco--no-grid { background-image: none; }",
+      // The grid is pinned to the canvas: the engine moves and scales it with
+      // every pan and zoom (see syncGrid), so it reads as a board lying
+      // behind the picture. Two lattices, one twice the other's pitch: the
+      // coarse one always shows, the fine one fades in as you zoom in and out
+      // as you zoom out, so the dots never crowd into a smear or thin out to
+      // nothing. Behind @supports because the fade needs color-mix(); without
+      // it the grid stays the fixed one above.
+      "@supports (color: color-mix(in srgb, red 50%, transparent)) {",
+      "  .fresco-viewer[data-fresco-grid] {",
+      "    background-image:",
+      "      radial-gradient(circle, var(--fresco-grid-dot) var(--fresco-grid-r), transparent calc(var(--fresco-grid-r) + 0.75px)),",
+      "      radial-gradient(circle, color-mix(in srgb, var(--fresco-grid-dot) var(--fresco-grid-fine), transparent)",
+      "        var(--fresco-grid-r), transparent calc(var(--fresco-grid-r) + 0.75px));",
+      "    background-size: var(--fresco-grid-pitch) var(--fresco-grid-pitch),",
+      "      calc(var(--fresco-grid-pitch) / 2) calc(var(--fresco-grid-pitch) / 2);",
+      "    background-position: var(--fresco-grid-x) var(--fresco-grid-y),",
+      "      var(--fresco-grid-fx) var(--fresco-grid-fy);",
+      "  }",
+      "  .fresco-viewer[data-fresco-grid].fresco--no-grid { background-image: none; }",
+      "}",
       // Stage: transformed surface holding the image(s). `transform-origin: 0 0`
       // pairs with the engine's (tx, ty, s) math. `will-change: transform` +
       // `backface-visibility: hidden` keep the layer permanently composited.
@@ -1358,6 +1378,7 @@
       stage.style.transform =
         "translate3d(" + ptx + "px, " + pty + "px, 0) rotate(" + rot + "deg)";
       showZoom();
+      syncGrid();
       bus._emit("animation", { tx: tx, ty: ty, scale: s, rotation: rot });
       bus._emit("update-viewport", { tx: tx, ty: ty, scale: s, rotation: rot });
     }
@@ -2380,10 +2401,48 @@
     function setGridVisible(on) {
       gridVisible = on !== false;
       if (el && el.classList) el.classList.toggle("fresco--no-grid", !gridVisible);
+      gridKey = "";
+      syncGrid();
       bus._emit("grid", { visible: gridVisible });
     }
 
     function getGridVisible() { return gridVisible; }
+
+    // Pins the dot grid to the canvas. The lattice sits on canvas multiples
+    // of a power of two, picked so its pitch on screen stays within
+    // [GRID_PITCH, 2 × GRID_PITCH): zooming in past that drops to the next
+    // power down, whose coarse lattice is the fine one that had just faded
+    // fully in, so nothing jumps. A dot sits at each tile's centre, hence
+    // the half-pitch shift. 90° turns map the lattice onto itself, so
+    // rotation needs nothing. Dots grow a little as you zoom in and shrink
+    // as you zoom out (about a pixel at home), never enough to blot.
+    var GRID_PITCH = 24;
+    var gridKey = "";
+    function syncGrid() {
+      if (!gridVisible || !(s > 0) || !el || !el.style) return;
+      var k = Math.floor(Math.log2(GRID_PITCH / s));
+      var pitch = Math.pow(2, k) * s;
+      while (pitch < GRID_PITCH) pitch *= 2;
+      while (pitch >= 2 * GRID_PITCH) pitch /= 2;
+      var fine = clamp((pitch / 2 - GRID_PITCH / 2) / (GRID_PITCH / 2), 0, 1);
+      var r = clamp(Math.pow(s / (sHome || s), 0.3), 0.6, 2.2);
+      var offX = mod(tx - pitch / 2, pitch), offY = mod(ty - pitch / 2, pitch);
+      var fOffX = mod(tx - pitch / 4, pitch / 2), fOffY = mod(ty - pitch / 4, pitch / 2);
+      var key = [pitch, fine, r, offX, offY].map(function(v) { return v.toFixed(2); }).join(",");
+      if (key === gridKey) return;
+      gridKey = key;
+      var st = el.style;
+      st.setProperty("--fresco-grid-pitch", pitch.toFixed(3) + "px");
+      st.setProperty("--fresco-grid-fine", Math.round(fine * 100) + "%");
+      st.setProperty("--fresco-grid-r", r.toFixed(2) + "px");
+      st.setProperty("--fresco-grid-x", offX.toFixed(2) + "px");
+      st.setProperty("--fresco-grid-y", offY.toFixed(2) + "px");
+      st.setProperty("--fresco-grid-fx", fOffX.toFixed(2) + "px");
+      st.setProperty("--fresco-grid-fy", fOffY.toFixed(2) + "px");
+      if (!el.hasAttribute("data-fresco-grid")) el.setAttribute("data-fresco-grid", "");
+    }
+
+    function mod(a, n) { return ((a % n) + n) % n; }
 
     function setRotation(deg) {
       var next = normalizeRotation(deg);
