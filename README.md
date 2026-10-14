@@ -183,7 +183,8 @@ By default a picture is fitted to the viewer, however big or small it is. A phot
 - **100% means one image pixel per physical screen pixel.** On a 2× (Retina) display that is half a CSS pixel, so 100% really does line the picture's pixels up with the screen's.
 - **A picture opens at fit or at 100%, whichever is smaller.** A 4K photo on a laptop opens fitted (and reads something like 23%); a 50×50 icon opens at its real size, small and sharp, instead of blown up and blurred to fill the view. You can still zoom it in. Reset view, a double tap's way back out, and the swipe's "fully zoomed out" all mean that opening view.
 - **An "actual size" button** — a magnifier with a 1 — sits between zoom out and zoom in (− 1 +). It goes to 100%, and from 100% to fit. The `1` key does the same.
-- **The percentage** shows in a small pill at the top centre while the zoom changes, and fades out a moment after.
+- **The zoom control** sits in the bottom-right corner and always shows the percentage. Hover it with a mouse, or tap it, and a slider opens to its left. It has detents at 50%, 100%, 150%, 200% and 400%: they are spaced evenly along the slider whatever lies between them, so the stretch from 200% to 400% at the far end runs fast, and the thumb sticks at each one for a few pixels of travel before moving on (with a buzz, on a phone that has one). It runs from the zoom-out floor to 400%, or to the zoom ceiling if that is lower. Arrow keys nudge it; Page Up / Page Down go detent to detent.
+- **Bottom chrome of your own?** Lift the control clear of it with `--fresco-zoom-bottom` (and `--fresco-zoom-right`) on the viewer element. Etcher does this itself while its tool bar fills a phone's bottom edge.
 
 ```heex
 <Fresco.viewer id="photo" src={@url} actual_size />

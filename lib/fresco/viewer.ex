@@ -184,8 +184,12 @@ defmodule Fresco.Viewer do
     - **An "actual size" button** (a magnifier with a 1) joins the nav
       between zoom out and zoom in: to 100%, and from 100% to fit.
       The `1` key does the same.
-    - **A percentage pill** shows the zoom at the top of the viewer while
-      it changes, and fades away a moment after.
+    - **A zoom control** in the bottom-right corner always shows the
+      percentage. Hover it (tap it on a phone) and a slider opens with
+      detents at 50%, 100%, 150%, 200% and 400%, spaced evenly so the
+      far end runs fast; the thumb sticks at each for a few pixels.
+      A host lifts it clear of its own bottom chrome with
+      `--fresco-zoom-bottom` (Etcher does this for its bars on a phone).
 
     100% is measured against the image's natural size — the loaded file's
     own pixels. Read the zoom with

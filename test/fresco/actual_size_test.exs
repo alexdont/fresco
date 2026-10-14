@@ -53,8 +53,17 @@ defmodule Fresco.ActualSizeTest do
       "    function zoomToActualSize() {",
       "    function toggleActualSize() {",
       "    function emitZoom() {",
-      "    function formatPercent(p) {"
+      "    function formatPercent(p) {",
+      "    function zoomStops() {",
+      "    function zoomToPos(p, stops) {",
+      "    function posToZoom(t, stops) {",
+      "    function zoomAtTrackX(x, width, stops) {",
+      "    function zoomToPercent(p) {"
     ]
+
+    consts =
+      Regex.scan(~r/^    var (?:ZOOM_DETENTS|ZOOM_TOP|DETENT_PX) = .*;$/m, src)
+      |> Enum.map_join("\n", &hd/1)
 
     {w, h} = Keyword.fetch!(opts, :image)
 
@@ -67,7 +76,7 @@ defmodule Fresco.ActualSizeTest do
     var sFit = 1, sMin = 1, sMax = 8, sHome = 1;
     var actualSize = #{Keyword.get(opts, :actual_size, true)};
     var infiniteCanvas = false;
-    var customSMin = #{Keyword.get(opts, :floor, "null")}, customSMax = null;
+    var customSMin = #{Keyword.get(opts, :floor, "null")}, customSMax = #{Keyword.get(opts, :ceiling, "null")};
     var customPanBounds = null, customHome = null;
     var el = { getBoundingClientRect: function() { return { width: 800, height: 600 }; } };
     function getNaturalSize() { return { w: #{w}, h: #{h} }; }
@@ -75,6 +84,7 @@ defmodule Fresco.ActualSizeTest do
     function requestFrame() {}
     function cancelAnimation() {}
     function rotationCosSin() { return { c: 1, sn: 0 }; }
+    #{consts}
     #{Enum.map_join(heads, "\n", &lift(src, &1))}
     var out = {};
     function pct() { return Math.round(zoomPercent() * 10) / 10; }
@@ -187,6 +197,94 @@ defmodule Fresco.ActualSizeTest do
         )
 
       assert out["zooms"] == [100, 20]
+    end
+  end
+
+  describe "the zoom slider" do
+    defp slider(script, opts \\ []) do
+      run(
+        """
+        var stops = zoomStops();
+        out.stops = stops && stops.map(function(x) { return [Math.round(x.p * 10) / 10, x.detent]; });
+        #{script}
+        """,
+        Keyword.put_new(opts, :image, {4000, 3000})
+      )
+    end
+
+    test "runs from the floor through every detent to 400%" do
+      out = slider("")
+
+      assert out["stops"] == [
+               [20.0, false],
+               [50, true],
+               [100, true],
+               [150, true],
+               [200, true],
+               [400, true]
+             ]
+    end
+
+    test "the stops sit evenly along it, so 200% to 400% is as short a stretch as 50% to 100%" do
+      out =
+        slider(
+          "out.pos = [20, 50, 100, 150, 200, 400].map(function(p) { return +zoomToPos(p, stops).toFixed(4); });"
+        )
+
+      assert out["pos"] == [0, 0.2, 0.4, 0.6, 0.8, 1]
+    end
+
+    test "a position and its percentage map back and forth" do
+      out =
+        slider("""
+        out.back = [0.1, 0.33, 0.5, 0.71, 0.95].map(function(t) {
+          return +zoomToPos(posToZoom(t, stops), stops).toFixed(6);
+        });
+        """)
+
+      assert out["back"] == [0.1, 0.33, 0.5, 0.71, 0.95]
+    end
+
+    test "the thumb sticks at a detent for a few pixels, then moves on smoothly" do
+      # 168px of track: 100% is at 40%, 67.2px along.
+      out =
+        slider("""
+        out.at = [67.2, 61, 73, 59, 76].map(function(x) {
+          var h = zoomAtTrackX(x, 168, stops); return [Math.round(h.p * 10) / 10, h.detent];
+        });
+        """)
+
+      assert [[100, 100], [100, 100], [100, 100], [below, nil], [above, nil]] = out["at"]
+      assert below < 100 and above > 100
+    end
+
+    test "a small picture opening at 100% starts its slider on that detent" do
+      out = slider("", image: {50, 50}, dpr: 2)
+      assert out["stops"] == [[100, true], [150, true], [200, true], [400, true]]
+    end
+
+    test "a ceiling below 400% ends the slider there" do
+      # 3× CSS at 1× screen: 300%.
+      out = slider("", ceiling: 3)
+      assert List.last(out["stops"]) == [300, false]
+      refute Enum.any?(out["stops"], fn [p, _] -> p == 400 end)
+    end
+
+    test "with nothing between floor and ceiling there is no slider" do
+      out = slider("", image: {50, 50}, ceiling: 1)
+      assert out["stops"] == nil
+    end
+
+    test "sliding zooms about the middle of the view" do
+      out =
+        slider("""
+        var cx = (400 - tx) / s, cy = (300 - ty) / s;
+        zoomToPercent(150);
+        out.pct = pct(); out.c = [(400 - tx) / s, (300 - ty) / s]; out.before = [cx, cy];
+        """)
+
+      assert out["pct"] == 150.0
+      assert out["c"] == out["before"]
     end
   end
 

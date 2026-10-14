@@ -16,8 +16,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   view, a double tap's way out and the swipe's "fully zoomed out" follow
   that opening view, and the zoom-out floor never stops short of it. An
   "actual size" nav button (a magnifier with a 1, between zoom out and
-  zoom in, also the `1` key) goes to 100% and from 100% to fit. A
-  percentage pill shows at the top centre while the zoom changes. At
+  zoom in, also the `1` key) goes to 100% and from 100% to fit. A zoom
+  control in the bottom-right corner always shows the percentage, and
+  opens a slider on hover or tap: detents at 50, 100, 150, 200 and 400%,
+  evenly spaced so the far end runs fast, each holding the thumb for a
+  few pixels. `--fresco-zoom-bottom` / `--fresco-zoom-right` move it. At
   exactly 100% the picture is painted on whole screen pixels, so
   centring cannot smear it across two.
 - **`handle.getZoomPercent()`**, **`toggleActualSize()`**,

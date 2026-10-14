@@ -281,22 +281,48 @@
       "}",
       ".fresco-nav svg { width: 18px; height: 18px; }",
 
-      // ── Zoom percentage (`actual_size`) ─────────────────────────────────
-      // Top centre, under a row nav (beside a column one). Not the bottom:
-      // that is where drawing toolbars live (Etcher's sits there on a
-      // phone, and the pill landed on it), and a host's side arrows are at
-      // mid-height. Dark whatever the theme: it sits on the picture.
-      ".fresco-zoom-pill {",
-      "  position: absolute; left: 50%; top: 16px; z-index: 10;",
-      "  transform: translateX(-50%);",
-      "  padding: 4px 10px; border-radius: 999px;",
-      "  background: var(--fresco-zoom-pill-bg, rgba(0, 0, 0, 0.6)); color: #fff;",
-      "  font: 600 13px/1.25 system-ui, -apple-system, sans-serif;",
+      // ── Zoom control (`actual_size`) ────────────────────────────────────
+      // The percentage, always showing, in the bottom-right corner; hover
+      // it (or tap it) and a slider opens to its left. Dark whatever the
+      // theme: it sits on the picture. A host lifts it clear of its own
+      // bottom chrome with `--fresco-zoom-bottom` / `--fresco-zoom-right`.
+      ".fresco-zoom {",
+      "  position: absolute; z-index: 10;",
+      "  right: var(--fresco-zoom-right, 12px); bottom: var(--fresco-zoom-bottom, 12px);",
+      "  display: flex; align-items: center; gap: 2px;",
+      "  height: 32px; padding: 0 4px; border-radius: 999px;",
+      "  background: var(--fresco-zoom-bg, rgba(0, 0, 0, 0.6)); color: #fff;",
+      "  font: 600 13px/1 system-ui, -apple-system, sans-serif;",
       "  font-variant-numeric: tabular-nums;",
-      "  pointer-events: none; opacity: 0; transition: opacity 300ms ease;",
+      "  user-select: none; -webkit-user-select: none; touch-action: none;",
+      "  transition: bottom 160ms ease;",
       "}",
-      ".fresco-zoom-pill[data-layout=\"row\"] { top: 60px; }",
-      ".fresco-zoom-pill[data-shown] { opacity: 1; transition-duration: 80ms; }",
+      ".fresco-zoom-pct {",
+      "  border: none; background: none; color: inherit; font: inherit;",
+      "  min-width: 48px; height: 28px; padding: 0 6px; border-radius: 999px; cursor: pointer;",
+      "}",
+      ".fresco-zoom-pct:focus-visible, .fresco-zoom-track:focus-visible {",
+      "  outline: 2px solid var(--fresco-nav-focus, #3b82f6); outline-offset: 1px;",
+      "}",
+      ".fresco-zoom-track {",
+      "  position: relative; width: 0; height: 28px; overflow: hidden;",
+      "  cursor: pointer; transition: width 160ms ease, margin 160ms ease;",
+      "}",
+      ".fresco-zoom[data-open] .fresco-zoom-track { width: 168px; margin-left: 10px; overflow: visible; }",
+      ".fresco-zoom-rail {",
+      "  position: absolute; left: 0; right: 0; top: 50%; height: 3px; margin-top: -1.5px;",
+      "  border-radius: 2px; background: rgba(255, 255, 255, 0.3);",
+      "}",
+      ".fresco-zoom-tick {",
+      "  position: absolute; top: 50%; width: 2px; height: 9px; margin: -4.5px 0 0 -1px;",
+      "  border-radius: 1px; background: rgba(255, 255, 255, 0.75);",
+      "}",
+      ".fresco-zoom-thumb {",
+      "  position: absolute; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px;",
+      "  border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);",
+      "  pointer-events: none;",
+      "}",
+      ".fresco-zoom[data-detent] .fresco-zoom-thumb { transform: scale(1.15); }",
 
       // ── Host theming ────────────────────────────────────────────────────
       ".fresco-viewer:not([data-fresco-theme=\"inherit\"]) {",
@@ -1925,17 +1951,211 @@
 
     function emitZoom() { bus._emit("zoom", { scale: s, percent: zoomPercent() }); }
 
-    // The percentage, shown at the bottom of the viewer while the zoom
-    // changes and faded out a moment after it stops — the photo apps' way.
+    // The zoom control (`actual_size`): the percentage, always showing in
+    // the bottom-right corner, and a slider that opens beside it — on hover
+    // with a mouse, on a tap or click otherwise. The slider has detents at
+    // ZOOM_DETENTS: they sit evenly along it whatever lies between them, so
+    // the stretch from 200% to 400% at the far end runs fast, and the thumb
+    // sticks at each one for a few pixels of travel before moving on.
     // Fed from apply(), so every path that changes the scale (wheel, pinch,
-    // buttons, a host's setTransform, a resize) shows it.
-    var zoomPill = null, pillScale = null, pillTimer = null;
-    var PILL_HOLD_MS = 1200;
-    if (actualSize && typeof document !== "undefined") {
-      zoomPill = document.createElement("div");
-      zoomPill.className = "fresco-zoom-pill";
-      zoomPill.setAttribute("aria-hidden", "true");
-      el.appendChild(zoomPill);
+    // buttons, a host's setTransform, a resize) keeps it current.
+    var ZOOM_DETENTS = [50, 100, 150, 200, 400];
+    var ZOOM_TOP = 400;
+    var DETENT_PX = 7;
+    var zoomCtl = null, zoomPct = null, zoomTrack = null, zoomThumb = null, zoomTicks = null;
+    var pillScale = null, zoomOpenTimer = null, zoomDrag = null, zoomDetent = null, zoomStopsKey = "";
+    var zoomOffDoc = null;
+    if (actualSize && typeof document !== "undefined") buildZoomControl();
+
+    function buildZoomControl() {
+      zoomCtl = document.createElement("div");
+      zoomCtl.className = "fresco-zoom";
+      zoomCtl.setAttribute("data-fresco-no-capture", "");
+      zoomTrack = document.createElement("div");
+      zoomTrack.className = "fresco-zoom-track";
+      zoomTrack.setAttribute("role", "slider");
+      zoomTrack.setAttribute("aria-label", "Zoom");
+      zoomTrack.tabIndex = -1;
+      var rail = document.createElement("div");
+      rail.className = "fresco-zoom-rail";
+      zoomTicks = document.createElement("div");
+      zoomThumb = document.createElement("div");
+      zoomThumb.className = "fresco-zoom-thumb";
+      zoomTrack.appendChild(rail);
+      zoomTrack.appendChild(zoomTicks);
+      zoomTrack.appendChild(zoomThumb);
+      zoomPct = document.createElement("button");
+      zoomPct.type = "button";
+      zoomPct.className = "fresco-zoom-pct";
+      zoomPct.title = "Zoom";
+      zoomPct.setAttribute("aria-expanded", "false");
+      zoomCtl.appendChild(zoomTrack);
+      zoomCtl.appendChild(zoomPct);
+      el.appendChild(zoomCtl);
+
+      zoomCtl.addEventListener("pointerenter", function(e) {
+        if (e.pointerType === "mouse") setZoomOpen(true);
+      });
+      zoomCtl.addEventListener("pointerleave", function(e) {
+        if (e.pointerType === "mouse" && !zoomDrag) closeZoomSoon();
+      });
+      // Not every browser says on a click which pointer made it.
+      var pressedWith = null;
+      zoomPct.addEventListener("pointerdown", function(e) { pressedWith = e.pointerType; });
+      zoomPct.addEventListener("click", function(e) {
+        e.stopPropagation();
+        // A mouse has already opened it by hovering; its click keeps it so.
+        setZoomOpen(pressedWith === "mouse" || !zoomCtl.hasAttribute("data-open"));
+        pressedWith = null;
+      });
+      zoomCtl.addEventListener("dblclick", function(e) { e.stopPropagation(); });
+      zoomCtl.addEventListener("wheel", function(e) { e.stopPropagation(); }, { passive: true });
+      zoomTrack.addEventListener("pointerdown", onZoomTrackDown);
+      zoomTrack.addEventListener("pointermove", onZoomTrackMove);
+      zoomTrack.addEventListener("pointerup", onZoomTrackUp);
+      zoomTrack.addEventListener("pointercancel", onZoomTrackUp);
+      zoomTrack.addEventListener("keydown", onZoomTrackKey);
+      zoomCtl.addEventListener("keydown", function(e) {
+        if (e.key === "Escape") { setZoomOpen(false); zoomPct.focus(); }
+        e.stopPropagation();
+      });
+      // A tap anywhere else closes it.
+      zoomOffDoc = function(e) {
+        if (zoomCtl.hasAttribute("data-open") && !zoomCtl.contains(e.target)) setZoomOpen(false);
+      };
+      document.addEventListener("pointerdown", zoomOffDoc, true);
+    }
+
+    function setZoomOpen(open) {
+      if (!zoomCtl) return;
+      if (zoomOpenTimer) { clearTimeout(zoomOpenTimer); zoomOpenTimer = null; }
+      if (open === zoomCtl.hasAttribute("data-open")) return;
+      if (open) {
+        zoomCtl.setAttribute("data-open", "");
+        zoomTrack.tabIndex = 0;
+        pillScale = null;
+        showZoom();
+      } else {
+        zoomCtl.removeAttribute("data-open");
+        zoomTrack.tabIndex = -1;
+      }
+      zoomPct.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+
+    function closeZoomSoon() {
+      if (zoomOpenTimer) clearTimeout(zoomOpenTimer);
+      zoomOpenTimer = setTimeout(function() { zoomOpenTimer = null; setZoomOpen(false); }, 500);
+    }
+
+    // The percentages the slider runs through, low end to high: the zoom-out
+    // floor, every detent above it, and ZOOM_TOP (or the ceiling, if lower).
+    // A detent within 1% of the floor IS the floor — a small picture opening
+    // at 100% starts its slider on the 100% detent.
+    function zoomStops() {
+      var lo = (sMin / sActual()) * 100;
+      var hi = Math.min(ZOOM_TOP, (sMax / sActual()) * 100);
+      if (!(hi > lo * 1.01)) return null;
+      var stops = [{ p: lo, detent: false }];
+      for (var i = 0; i < ZOOM_DETENTS.length; i++) {
+        var d = ZOOM_DETENTS[i];
+        if (Math.abs(d / lo - 1) < 0.01) { stops[0] = { p: d, detent: true }; continue; }
+        if (d > lo && d <= hi * 1.0001) stops.push({ p: d, detent: true });
+      }
+      if (stops[stops.length - 1].p < hi / 1.0001) stops.push({ p: hi, detent: false });
+      return stops;
+    }
+
+    // Slider position (0..1) for a percentage, and back. The stops are
+    // spaced evenly; between two of them the zoom runs geometrically, so a
+    // drag feels the same at 20% as at 300%.
+    function zoomToPos(p, stops) {
+      var n = stops.length - 1;
+      if (p <= stops[0].p) return 0;
+      for (var i = 0; i < n; i++) {
+        var a = stops[i].p, b = stops[i + 1].p;
+        if (p <= b) return (i + Math.log(p / a) / Math.log(b / a)) / n;
+      }
+      return 1;
+    }
+
+    function posToZoom(t, stops) {
+      var n = stops.length - 1;
+      var x = clamp(t, 0, 1) * n;
+      var i = Math.min(n - 1, Math.floor(x));
+      var a = stops[i].p, b = stops[i + 1].p;
+      return a * Math.pow(b / a, x - i);
+    }
+
+    // Where a press at `x` CSS pixels along the track lands: on a detent if
+    // it is within DETENT_PX of one, otherwise exactly where it is.
+    function zoomAtTrackX(x, width, stops) {
+      for (var i = 0; i < stops.length; i++) {
+        if (!stops[i].detent) continue;
+        if (Math.abs(x - zoomToPos(stops[i].p, stops) * width) <= DETENT_PX) {
+          return { p: stops[i].p, detent: stops[i].p };
+        }
+      }
+      return { p: posToZoom(x / width, stops), detent: null };
+    }
+
+    function zoomToPercent(p) {
+      cancelAnimation();
+      refresh();
+      zoomAt(vw / 2, vh / 2, (p / 100) * sActual() / s);
+    }
+
+    function onZoomTrackDown(e) {
+      if (!zoomCtl.hasAttribute("data-open")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      try { zoomTrack.setPointerCapture(e.pointerId); } catch (_) {}
+      zoomDrag = { id: e.pointerId };
+      zoomDetent = null;
+      zoomTrack.focus({ preventScroll: true });
+      onZoomTrackMove(e);
+    }
+
+    function onZoomTrackMove(e) {
+      if (!zoomDrag || e.pointerId !== zoomDrag.id) return;
+      var stops = zoomStops();
+      if (!stops) return;
+      var r = zoomTrack.getBoundingClientRect();
+      var hit = zoomAtTrackX(e.clientX - r.left, r.width, stops);
+      if (hit.detent !== null && hit.detent !== zoomDetent) {
+        // The "chick": a buzz where the device has one.
+        try { if (navigator.vibrate) navigator.vibrate(6); } catch (_) {}
+      }
+      zoomDetent = hit.detent;
+      zoomToPercent(hit.p);
+    }
+
+    function onZoomTrackUp(e) {
+      if (!zoomDrag || e.pointerId !== zoomDrag.id) return;
+      zoomDrag = null;
+      zoomDetent = null;
+      try { zoomTrack.releasePointerCapture(e.pointerId); } catch (_) {}
+      if (e.pointerType === "mouse" && !zoomCtl.matches(":hover")) closeZoomSoon();
+    }
+
+    // Arrows nudge; Page Up / Page Down go detent to detent.
+    function onZoomTrackKey(e) {
+      var stops = zoomStops();
+      if (!stops) return;
+      var t = zoomToPos(zoomPercent(), stops);
+      var p = null;
+      if (e.key === "ArrowRight" || e.key === "ArrowUp") p = posToZoom(t + 0.025, stops);
+      else if (e.key === "ArrowLeft" || e.key === "ArrowDown") p = posToZoom(t - 0.025, stops);
+      else if (e.key === "Home") p = stops[0].p;
+      else if (e.key === "End") p = stops[stops.length - 1].p;
+      else if (e.key === "PageUp" || e.key === "PageDown") {
+        var up = e.key === "PageUp", cur = zoomPercent();
+        for (var i = up ? 0 : stops.length - 1; up ? i < stops.length : i >= 0; i += up ? 1 : -1) {
+          if (up ? stops[i].p > cur * 1.01 : stops[i].p < cur / 1.01) { p = stops[i].p; break; }
+        }
+      }
+      if (p === null) return;
+      e.preventDefault();
+      zoomToPercent(p);
     }
 
     function formatPercent(p) {
@@ -1946,17 +2166,34 @@
     }
 
     function showZoom() {
-      if (!zoomPill || !ready || s === pillScale) return;
+      if (!zoomCtl || !ready || s === pillScale) return;
       pillScale = s;
-      zoomPill.textContent = formatPercent(zoomPercent());
-      // Follows the nav, which a host may switch at runtime.
-      zoomPill.setAttribute("data-layout", (navEl && navEl.getAttribute("data-layout")) || "column");
-      zoomPill.setAttribute("data-shown", "");
-      if (pillTimer) clearTimeout(pillTimer);
-      pillTimer = setTimeout(function() {
-        pillTimer = null;
-        zoomPill.removeAttribute("data-shown");
-      }, PILL_HOLD_MS);
+      var pct = zoomPercent();
+      zoomPct.textContent = formatPercent(pct);
+      zoomTrack.setAttribute("aria-valuenow", String(Math.round(pct)));
+      zoomTrack.setAttribute("aria-valuetext", formatPercent(pct));
+      var stops = zoomStops();
+      var key = stops ? stops.map(function(x) { return x.p.toFixed(2); }).join(",") : "";
+      if (key !== zoomStopsKey) {
+        zoomStopsKey = key;
+        zoomTicks.textContent = "";
+        if (stops) {
+          zoomTrack.setAttribute("aria-valuemin", String(Math.round(stops[0].p)));
+          zoomTrack.setAttribute("aria-valuemax", String(Math.round(stops[stops.length - 1].p)));
+          for (var i = 0; i < stops.length; i++) {
+            if (!stops[i].detent) continue;
+            var tick = document.createElement("div");
+            tick.className = "fresco-zoom-tick";
+            tick.title = stops[i].p + "%";
+            tick.style.left = (zoomToPos(stops[i].p, stops) * 100) + "%";
+            zoomTicks.appendChild(tick);
+          }
+        }
+      }
+      zoomThumb.style.left = (stops ? zoomToPos(pct, stops) * 100 : 0) + "%";
+      var onDetent = !!stops && stops.some(function(x) { return x.detent && Math.abs(pct / x.p - 1) < 0.001; });
+      if (onDetent) zoomCtl.setAttribute("data-detent", "");
+      else zoomCtl.removeAttribute("data-detent");
       syncActualButton();
     }
 
@@ -2045,8 +2282,9 @@
       }
       if (navEl && navEl._frescoNav) navEl._frescoNav.teardown();
       if (navEl && navEl.parentNode) navEl.parentNode.removeChild(navEl);
-      if (pillTimer) { clearTimeout(pillTimer); pillTimer = null; }
-      if (zoomPill && zoomPill.parentNode) zoomPill.parentNode.removeChild(zoomPill);
+      if (zoomOpenTimer) { clearTimeout(zoomOpenTimer); zoomOpenTimer = null; }
+      if (zoomOffDoc) { document.removeEventListener("pointerdown", zoomOffDoc, true); zoomOffDoc = null; }
+      if (zoomCtl && zoomCtl.parentNode) zoomCtl.parentNode.removeChild(zoomCtl);
     }
 
     // Override the engine's sMin (the zoom-out floor). Pass a positive
