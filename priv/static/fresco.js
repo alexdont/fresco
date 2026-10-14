@@ -359,21 +359,16 @@
       ".fresco-viewer.fresco--no-grid { background-image: none; }",
       // The grid is pinned to the canvas: the engine moves and scales it with
       // every pan and zoom (see syncGrid), so it reads as a board lying
-      // behind the picture. Two lattices, one twice the other's pitch: the
-      // coarse one always shows, the fine one fades in as you zoom in and out
-      // as you zoom out, so the dots never crowd into a smear or thin out to
-      // nothing. Behind @supports because the fade needs color-mix(); without
-      // it the grid stays the fixed one above.
+      // behind the picture — the same dots throughout, spreading out and
+      // drawing in. Behind @supports because the fade at extreme zoom-out
+      // needs color-mix(); without it the grid stays the fixed one above.
       "@supports (color: color-mix(in srgb, red 50%, transparent)) {",
       "  .fresco-viewer[data-fresco-grid] {",
-      "    background-image:",
-      "      radial-gradient(circle, var(--fresco-grid-dot) var(--fresco-grid-r), transparent calc(var(--fresco-grid-r) + 0.75px)),",
-      "      radial-gradient(circle, color-mix(in srgb, var(--fresco-grid-dot) var(--fresco-grid-fine), transparent)",
-      "        var(--fresco-grid-r), transparent calc(var(--fresco-grid-r) + 0.75px));",
-      "    background-size: var(--fresco-grid-pitch) var(--fresco-grid-pitch),",
-      "      calc(var(--fresco-grid-pitch) / 2) calc(var(--fresco-grid-pitch) / 2);",
-      "    background-position: var(--fresco-grid-x) var(--fresco-grid-y),",
-      "      var(--fresco-grid-fx) var(--fresco-grid-fy);",
+      "    background-image: radial-gradient(circle,",
+      "      color-mix(in srgb, var(--fresco-grid-dot) var(--fresco-grid-alpha), transparent) var(--fresco-grid-r),",
+      "      transparent calc(var(--fresco-grid-r) + 0.75px));",
+      "    background-size: var(--fresco-grid-pitch) var(--fresco-grid-pitch);",
+      "    background-position: var(--fresco-grid-x) var(--fresco-grid-y);",
       "  }",
       "  .fresco-viewer[data-fresco-grid].fresco--no-grid { background-image: none; }",
       "}",
@@ -2408,37 +2403,41 @@
 
     function getGridVisible() { return gridVisible; }
 
-    // Pins the dot grid to the canvas. The lattice sits on canvas multiples
-    // of a power of two, picked so its pitch on screen stays within
-    // [GRID_PITCH, 2 × GRID_PITCH): zooming in past that drops to the next
-    // power down, whose coarse lattice is the fine one that had just faded
-    // fully in, so nothing jumps. A dot sits at each tile's centre, hence
-    // the half-pitch shift. 90° turns map the lattice onto itself, so
-    // rotation needs nothing. Dots grow a little as you zoom in and shrink
-    // as you zoom out (about a pixel at home), never enough to blot.
+    // Pins the dot grid to the canvas: the same dots throughout, carried by
+    // a pan and spread out or drawn in by a zoom. Their spacing is fixed in
+    // canvas units the first time the grid is painted — GRID_PITCH px apart
+    // at the opening view — and never changes after, so nothing comes or
+    // goes. Dots grow as you zoom in and shrink as you zoom out (about a
+    // pixel at home), more gently than the spacing so they never blot. Only
+    // where the dots would pack into a smear (a board zoomed far out) does
+    // the whole grid fade, between GRID_FADE_FROM and GRID_FADE_TO px. A dot
+    // sits at each tile's centre, hence the half-pitch shift; 90° turns map
+    // the lattice onto itself, so rotation needs nothing.
     var GRID_PITCH = 24;
+    var GRID_FADE_FROM = 8, GRID_FADE_TO = 4;
+    var gridCanvasPitch = null, gridHome = null;
     var gridKey = "";
     function syncGrid() {
       if (!gridVisible || !(s > 0) || !el || !el.style) return;
-      var k = Math.floor(Math.log2(GRID_PITCH / s));
-      var pitch = Math.pow(2, k) * s;
-      while (pitch < GRID_PITCH) pitch *= 2;
-      while (pitch >= 2 * GRID_PITCH) pitch /= 2;
-      var fine = clamp((pitch / 2 - GRID_PITCH / 2) / (GRID_PITCH / 2), 0, 1);
-      var r = clamp(Math.pow(s / (sHome || s), 0.3), 0.6, 2.2);
+      if (gridCanvasPitch === null) {
+        // Not before the picture is in: home is only known then.
+        if (!ready || !(sHome > 0)) return;
+        gridHome = sHome;
+        gridCanvasPitch = GRID_PITCH / sHome;
+      }
+      var pitch = gridCanvasPitch * s;
+      var alpha = clamp((pitch - GRID_FADE_TO) / (GRID_FADE_FROM - GRID_FADE_TO), 0, 1);
+      var r = clamp(Math.sqrt(s / gridHome), 0.5, 3);
       var offX = mod(tx - pitch / 2, pitch), offY = mod(ty - pitch / 2, pitch);
-      var fOffX = mod(tx - pitch / 4, pitch / 2), fOffY = mod(ty - pitch / 4, pitch / 2);
-      var key = [pitch, fine, r, offX, offY].map(function(v) { return v.toFixed(2); }).join(",");
+      var key = [pitch, alpha, r, offX, offY].map(function(v) { return v.toFixed(2); }).join(",");
       if (key === gridKey) return;
       gridKey = key;
       var st = el.style;
       st.setProperty("--fresco-grid-pitch", pitch.toFixed(3) + "px");
-      st.setProperty("--fresco-grid-fine", Math.round(fine * 100) + "%");
+      st.setProperty("--fresco-grid-alpha", Math.round(alpha * 100) + "%");
       st.setProperty("--fresco-grid-r", r.toFixed(2) + "px");
       st.setProperty("--fresco-grid-x", offX.toFixed(2) + "px");
       st.setProperty("--fresco-grid-y", offY.toFixed(2) + "px");
-      st.setProperty("--fresco-grid-fx", fOffX.toFixed(2) + "px");
-      st.setProperty("--fresco-grid-fy", fOffY.toFixed(2) + "px");
       if (!el.hasAttribute("data-fresco-grid")) el.setAttribute("data-fresco-grid", "");
     }
 

@@ -3,12 +3,11 @@ defmodule Fresco.GridFollowsTest do
   The dot grid is pinned to the canvas: a pan carries it along, a zoom
   spreads it out or draws it in, as if the board lay behind the picture.
 
-  It cannot simply scale — zoomed far out the dots would crowd into a smear,
-  zoomed far in thin out to nothing — so the lattice sits on canvas
-  multiples of a power of two, chosen to keep the pitch on screen within
-  [24, 48) px. A second lattice at half that pitch fades in as you zoom in;
-  when it is fully in, it becomes the coarse one and a finer one starts at
-  nothing, so no dot ever jumps.
+  The same dots throughout — none come or go as you zoom. Their spacing is
+  fixed in canvas units the first time the grid is painted (24 px apart at
+  the opening view) and only scales after that. The one exception is a
+  board zoomed out so far the dots would pack into a smear: there the whole
+  grid fades, together.
 
   `syncGrid` is read out of the bundle and run in node against a stub
   element that records the custom properties it sets.
@@ -41,7 +40,10 @@ defmodule Fresco.GridFollowsTest do
                setAttribute: function(k, v) { attrs[k] = v; } };
     var tx = 0, ty = 0, s = 1, sHome = #{Keyword.get(opts, :home, 0.5)};
     var gridVisible = #{Keyword.get(opts, :visible, true)};
-    var GRID_PITCH = #{Regex.run(~r/var GRID_PITCH = (\d+);/, src) |> Enum.at(1)};
+    var ready = #{Keyword.get(opts, :ready, true)};
+    #{Regex.run(~r/    var GRID_PITCH = \d+;/, src) |> hd()}
+    #{Regex.run(~r/    var GRID_FADE_FROM = .*;/, src) |> hd()}
+    var gridCanvasPitch = null, gridHome = null;
     var gridKey = "";
     function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
     #{lift(src, "    function syncGrid() {")}
@@ -51,9 +53,8 @@ defmodule Fresco.GridFollowsTest do
       gridKey = "";
       syncGrid();
       var px = function(k) { return k in props ? parseFloat(props[k]) : null; };
-      return { pitch: px("--fresco-grid-pitch"), fine: px("--fresco-grid-fine"), r: px("--fresco-grid-r"),
-               x: px("--fresco-grid-x"), y: px("--fresco-grid-y"),
-               fx: px("--fresco-grid-fx"), fy: px("--fresco-grid-fy"), tagged: "data-fresco-grid" in attrs };
+      return { pitch: px("--fresco-grid-pitch"), alpha: px("--fresco-grid-alpha"), r: px("--fresco-grid-r"),
+               x: px("--fresco-grid-x"), y: px("--fresco-grid-y"), tagged: "data-fresco-grid" in attrs };
     });
     console.log(JSON.stringify(out));
     """
@@ -62,28 +63,48 @@ defmodule Fresco.GridFollowsTest do
     Jason.decode!(String.trim(out))
   end
 
-  test "on screen the pitch stays between 24 and 48 px, from 1% to 2000%" do
-    scales = for e <- -60..40, do: :math.pow(2, e / 10)
+  test "24 px apart at the opening view, and the spacing scales exactly with the zoom" do
+    # Home is 0.5 here, so the dots are 48 canvas units apart.
+    out = run("[[0, 0, 0.5], [0, 0, 1], [0, 0, 2], [0, 0, 0.25], [0, 0, 1.7]]")
+    assert Enum.map(out, & &1["pitch"]) == [24.0, 48.0, 96.0, 12.0, 81.6]
+  end
+
+  test "the same dots throughout: none appear or vanish anywhere in the zoom range" do
+    # From where the dots are about 8.5 px apart (just short of the fade) to 16× in.
+    scales = for e <- -15..40, do: 0.5 * :math.pow(2, e / 10)
     out = run(Jason.encode!(Enum.map(scales, &[0, 0, &1])))
 
-    for g <- out do
-      assert g["pitch"] >= 24 and g["pitch"] < 48.001, inspect(g)
-      assert g["tagged"]
+    for {g, s} <- Enum.zip(out, scales) do
+      assert_in_delta g["pitch"], 48 * s, 0.01
+      assert g["alpha"] == 100, "full strength at #{s}"
     end
+  end
+
+  test "the spacing is fixed once; a later change of home does not move it" do
+    # One run, two homes: the second view must keep the first's spacing.
+    src = File.read!(@source)
+    assert lift(src, "    function syncGrid() {") =~ "if (gridCanvasPitch === null) {"
+    [g] = run("[[0, 0, 1]]", home: 0.25)
+    assert g["pitch"] == 96.0
+  end
+
+  test "not painted before the picture is in, when home is not known yet" do
+    [g] = run("[[0, 0, 1]]", ready: false)
+    assert g["pitch"] == nil
+    refute g["tagged"]
   end
 
   test "the dots sit on fixed canvas points, so a pan carries them exactly" do
     [a, b] = run("[[10, 20, 0.7], [110, -30, 0.7]]")
     assert a["pitch"] == b["pitch"]
-    # 100 px right and 50 px up, wrapped at the pitch.
-    assert_in_delta mod(b["x"] - a["x"], a["pitch"]), mod(100, a["pitch"]), 0.02
-    assert_in_delta mod(b["y"] - a["y"], a["pitch"]), mod(-50, a["pitch"]), 0.02
+    assert_in_delta mod(b["x"] - a["x"], a["pitch"]), mod(100.0, a["pitch"]), 0.02
+    assert_in_delta mod(b["y"] - a["y"], a["pitch"]), mod(-50.0, a["pitch"]), 0.02
   end
 
-  test "a coarse dot lies on the canvas origin's lattice, whatever the pan and zoom" do
+  test "a dot lies on the canvas origin's lattice, whatever the pan and zoom" do
     for [tx, ty, s] <- [[0, 0, 1], [37.5, -12.25, 0.3], [-900, 410, 3.7]] do
       [g] = run(Jason.encode!([[tx, ty, s]]))
-      # Dot centres are at x + pitch/2 + n·pitch; the canvas origin is at tx.
+
       assert_in_delta mod(g["x"] + g["pitch"] / 2 - tx, g["pitch"]) |> min_wrap(g["pitch"]),
                       0,
                       0.02
@@ -91,24 +112,15 @@ defmodule Fresco.GridFollowsTest do
       assert_in_delta mod(g["y"] + g["pitch"] / 2 - ty, g["pitch"]) |> min_wrap(g["pitch"]),
                       0,
                       0.02
-
-      # …and the fine lattice includes every coarse dot.
-      assert_in_delta mod(g["fx"] + g["pitch"] / 4 - tx, g["pitch"] / 2)
-                      |> min_wrap(g["pitch"] / 2),
-                      0,
-                      0.02
     end
   end
 
-  test "the fine dots fade in with the zoom and hand over without a jump" do
-    # Pitch 24 at s = 24/32 = 0.75; just under 48 at s just under 1.5.
-    [lo, mid, hi, past] = run("[[0, 0, 0.75], [0, 0, 1.0], [0, 0, 1.4999], [0, 0, 1.5001]]")
-    assert lo["fine"] == 0
-    assert mid["fine"] > 0 and mid["fine"] < 100
-    assert hi["fine"] == 100
-    # Past the hand-over the coarse lattice is the fine one that was fully in.
-    assert_in_delta past["pitch"], hi["pitch"] / 2, 0.01
-    assert past["fine"] == 0
+  test "zoomed out so far the dots would smear, the whole grid fades together" do
+    # Pitch 8 px at s = 1/6 (home 0.5), 4 px at 1/12.
+    [edge, half, gone] = run("[[0, 0, #{1 / 6}], [0, 0, #{1 / 8}], [0, 0, #{1 / 12}]]")
+    assert edge["alpha"] == 100
+    assert half["alpha"] == 50
+    assert gone["alpha"] == 0
   end
 
   test "dots grow as you zoom in and shrink as you zoom out, about a pixel at home" do
@@ -116,10 +128,10 @@ defmodule Fresco.GridFollowsTest do
       run("[[0,0,0.5],[0,0,1],[0,0,0.25],[0,0,500],[0,0,0.0001]]")
 
     assert home["r"] == 1.0
-    assert near["r"] > 1.0
+    assert near["r"] > 1.0 and near["r"] < 2.0, "more gently than the spacing"
     assert far["r"] < 1.0
-    assert way_in["r"] == 2.2, "never enough to blot"
-    assert way_out["r"] == 0.6, "never vanishing"
+    assert way_in["r"] == 3.0, "never enough to blot"
+    assert way_out["r"] == 0.5, "never vanishing"
   end
 
   test "a hidden grid is left alone" do

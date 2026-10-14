@@ -32,13 +32,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **The dot grid moves with the canvas.** It used to sit fixed on the
   viewer while the picture panned and zoomed over it. It is now pinned to
-  the canvas, like a board lying behind the picture: a pan carries it, a
-  zoom spreads the dots out (growing them a little) or draws them in. Its
-  lattice is a power-of-two multiple of canvas units chosen to keep the
-  spacing on screen between 24 and 48 px, with a half-pitch lattice that
-  fades in as you zoom in and becomes the main one when fully in, so no
-  dot ever jumps. Turning the grid off works as before. Needs
-  `color-mix()`; older browsers keep the fixed grid.
+  the canvas, like a board lying behind the picture: the same dots
+  throughout, their spacing fixed in canvas units when the picture first
+  shows (24 px apart at the opening view), carried by a pan and spread out
+  or drawn in by a zoom, the dots growing or shrinking a little with it.
+  Only where they would pack into a smear (a board zoomed far out, under
+  8 px apart) does the whole grid fade. Turning the grid off works as
+  before. Needs `color-mix()`; older browsers keep the fixed grid.
 - **Two fingers on a trackpad now move the picture with them.** The
   wheel deltas say how far a page would scroll, and the picture now moves
   the way that page's content does — so on a trackpad that scrolls

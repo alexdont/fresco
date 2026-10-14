@@ -62,7 +62,7 @@ You get:
 - **Fit-to-view** initial state regardless of image / container aspect ratio
 - **Nav overlay** (Heroicons): zoom in / zoom out / rotate / reset view / fullscreen — a column by default, or a short row that fits a phone (see [The nav on small screens](#the-nav-on-small-screens)).
 - **Viewport clamped** so the image can't be panned off-screen (unless you opt into [infinite canvas](#infinite-canvas))
-- **Subtle dot-grid background** on the viewer container (Figma/Miro style); shows through any padding around the image and lights up the void in `infinite_canvas` mode. The grid is pinned to the canvas, like a board lying behind the picture: a pan carries it along, zooming in spreads the dots out and grows them a little, zooming out draws them in. So they never crowd into a smear or thin out to nothing, every other dot fades out as they get close and back in as they spread. `handle.setGridVisible(false)` turns it off.
+- **Subtle dot-grid background** on the viewer container (Figma/Miro style); shows through any padding around the image and lights up the void in `infinite_canvas` mode. The grid is pinned to the canvas, like a board lying behind the picture: the same dots throughout, 24 px apart at the opening view, carried by a pan and spread out (growing a little) or drawn in by a zoom. Only on a board zoomed out so far that they would pack into a smear does the whole grid fade. `handle.setGridVisible(false)` turns it off.
 - **Light / dark / system themes**, or inherit your app's palette (see [Theming](#theming-light--dark--system--inherit)).
 
 ---
