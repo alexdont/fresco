@@ -8,6 +8,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- ↑ ↑ ↓ ↓ ← → ← → B A, with a viewer on screen: a ring of dots ripples
+  out from the pointer across the picture, like a stone dropped in a
+  pond, and settles. A look only: nothing is saved, keys typed into a
+  field don't count, and once ↑ ↑ ↓ ↓ is in the keys that follow are kept
+  from the host, so a gallery's ← / → doesn't flip the picture mid-code.
+  Skipped under `prefers-reduced-motion`.
 - **`actual_size`** on `<Fresco.viewer>` and `<Fresco.canvas>` — zoom in
   real pixels, the way a photo app does. 100% is one natural pixel per
   *physical* screen pixel (half a CSS pixel on a 2× display). A picture

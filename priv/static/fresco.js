@@ -2242,6 +2242,10 @@
     el.addEventListener("dblclick", onDblClick);
     el.addEventListener("keydown", onKeyDown);
     el.addEventListener("dragstart", onDragStart);
+    el.addEventListener("pointermove", onKonamiPointer);
+    el.addEventListener("pointerleave", onKonamiPointerLeave);
+    // Capture, on the window: ahead of a host's own arrow-key handlers.
+    window.addEventListener("keydown", onKonamiKey, true);
 
     var navEl = buildNav(el, {
       onFit: function() { resetView(); },
@@ -2292,6 +2296,10 @@
       el.removeEventListener("dblclick", onDblClick);
       el.removeEventListener("keydown", onKeyDown);
       el.removeEventListener("dragstart", onDragStart);
+      el.removeEventListener("pointermove", onKonamiPointer);
+      el.removeEventListener("pointerleave", onKonamiPointerLeave);
+      window.removeEventListener("keydown", onKonamiKey, true);
+      if (rippleFrame) { cancelAnimationFrame(rippleFrame); rippleFrame = null; }
       if (resizeObserver) {
         try { resizeObserver.disconnect(); } catch (_) {}
         resizeObserver = null;
@@ -2442,6 +2450,117 @@
     }
 
     function mod(a, n) { return ((a % n) + n) % n; }
+
+    // ↑ ↑ ↓ ↓ ← → ← → B A: a ring of dots ripples outward from the pointer
+    // (or the middle) across the picture, like a stone dropped in a pond,
+    // and settles. Purely a look:
+    // nothing is saved, nothing else moves, and it never fires from a key
+    // typed into a field. Once ↑ ↑ ↓ ↓ is in, the arrows that follow are
+    // the code's, not the host's — a gallery's ← / → would otherwise flip
+    // to the next picture half way through.
+    var KONAMI = ["ArrowUp", "ArrowUp", "ArrowDown", "ArrowDown",
+      "ArrowLeft", "ArrowRight", "ArrowLeft", "ArrowRight", "b", "a"];
+    var KONAMI_IDLE_MS = 2500;
+    var konamiAt = 0, konamiLast = 0;
+    var konamiPointer = null;
+    var rippleFrame = null;
+
+    function onKonamiPointer(e) {
+      var r = el.getBoundingClientRect();
+      konamiPointer = { x: e.clientX - r.left, y: e.clientY - r.top };
+    }
+    function onKonamiPointerLeave() { konamiPointer = null; }
+
+    function onKonamiKey(e) {
+      if (!el.isConnected) return;
+      var t = e.target;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ""))) return;
+      var r = el.getBoundingClientRect();
+      if (!(r.width > 0 && r.height > 0)) return;
+      var now = Date.now();
+      if (now - konamiLast > KONAMI_IDLE_MS) konamiAt = 0;
+      konamiLast = now;
+      var key = e.key && e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      if (key === KONAMI[konamiAt]) konamiAt++;
+      else konamiAt = key === KONAMI[0] ? 1 : 0;
+      // Past ↑ ↑ ↓ ↓, the arrows and letters are spoken for.
+      if (konamiAt > 4) { e.preventDefault(); e.stopImmediatePropagation(); }
+      if (konamiAt === KONAMI.length) {
+        konamiAt = 0;
+        ripple();
+      }
+    }
+
+    function ripple() {
+      var reduce = false;
+      try { reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (_) {}
+      if (reduce || rippleFrame || !(s > 0)) return;
+      var rect = el.getBoundingClientRect();
+      var w = rect.width, h = rect.height;
+      var dpr = window.devicePixelRatio || 1;
+      var cv = document.createElement("canvas");
+      cv.className = "fresco-ripple";
+      cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+      cv.style.cssText = "position:absolute;left:0;top:0;width:" + w + "px;height:" + h + "px;pointer-events:none;";
+      // Just above the picture: a picture usually fills the view, and a
+      // ripple behind it would only show in the margins. Under whatever a
+      // host lays over the stage (drawings, controls) all the same.
+      if (stage && stage.parentNode === el) el.insertBefore(cv, stage.nextSibling);
+      else el.appendChild(cv);
+      var ctx = cv.getContext("2d");
+      if (!ctx) { cv.parentNode.removeChild(cv); return; }
+      var ox = konamiPointer ? konamiPointer.x : w / 2;
+      var oy = konamiPointer ? konamiPointer.y : h / 2;
+      var reach = Math.max(Math.hypot(ox, oy), Math.hypot(w - ox, oy),
+        Math.hypot(ox, h - oy), Math.hypot(w - ox, h - oy));
+      var DURATION = 1800;
+      var start = null;
+      function frame(ts) {
+        if (start === null) start = ts;
+        var t = (ts - start) / DURATION;
+        if (t >= 1 || !el.isConnected) {
+          rippleFrame = null;
+          if (cv.parentNode) cv.parentNode.removeChild(cv);
+          return;
+        }
+        // The board's own lattice this frame, so a pan mid-ripple carries
+        // the ring with it.
+        var pitch = (gridCanvasPitch || GRID_PITCH / (sHome || s)) * s;
+        if (pitch < 8) pitch *= Math.ceil(8 / pitch);
+        var baseR = clamp(Math.sqrt(s / (gridHome || sHome || s)), 0.75, 3);
+        var offX = mod(tx - pitch / 2, pitch), offY = mod(ty - pitch / 2, pitch);
+        // Only the crest is drawn: a ring a couple of dots wide running out
+        // past the far corner, lifting the dots it passes outward, and
+        // fading as it spreads.
+        var ease = 1 - Math.pow(1 - t, 2);
+        var front = ease * (reach + pitch * 3);
+        var width = pitch * 1.4;
+        var fade = 1 - t;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = "#ffffff";
+        ctx.strokeStyle = "rgba(0, 0, 0, 0.35)";
+        ctx.lineWidth = 1;
+        var x0 = Math.max(offX - pitch, ox - front - width * 3);
+        var x1 = Math.min(w + pitch, ox + front + width * 3);
+        for (var y = offY - pitch; y < h + pitch; y += pitch) {
+          for (var x = offX - pitch + Math.floor((x0 - offX + pitch) / pitch) * pitch; x < x1; x += pitch) {
+            var dx = x - ox, dy = y - oy;
+            var d = Math.sqrt(dx * dx + dy * dy) || 1;
+            var g = Math.exp(-Math.pow((d - front) / width, 2));
+            if (g < 0.04) continue;
+            var k = pitch * 0.6 * g * fade / d;
+            ctx.globalAlpha = g * (0.35 + 0.65 * fade);
+            ctx.beginPath();
+            ctx.arc(x + dx * k, y + dy * k, baseR * (1 + 1.6 * g), 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+          }
+        }
+        rippleFrame = requestAnimationFrame(frame);
+      }
+      rippleFrame = requestAnimationFrame(frame);
+    }
 
     function setRotation(deg) {
       var next = normalizeRotation(deg);
