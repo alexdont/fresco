@@ -212,7 +212,7 @@ A column of buttons down the left edge is fine on a desktop and runs most of the
 
 ## Gestures and events worth knowing
 
-- **Two fingers on a trackpad pan** the view, the way they scroll a page. The browser reports them after the OS's own scroll-direction setting, so no default suits every laptop: `invert_two_finger_pan` (or `handle.setTwoFingerPanInverted(true)`) flips it — typically fed from a per-user preference.
+- **Two fingers on a trackpad pan** the picture the way they move a page's content: on a trackpad that scrolls naturally (a Mac's default), the picture follows the fingers, as if you were holding it. The browser reports them after the OS's own scroll-direction setting, so no default suits every laptop: `invert_two_finger_pan` (or `handle.setTwoFingerPanInverted(true)`) flips it — typically fed from a per-user preference.
 - **Swipe between pictures.** A one-finger swipe across a picture at its fitted view (its opening view, under `actual_size`) fires `swipe` (`%{direction: "left" | "right"}`) on the handle and a bubbling `fresco:swipe` DOM event on the viewer element — your cue to show the next or previous one. Zoomed in, the same drag is a pan and is never announced. Touch and pen only.
 - **`:gestures`** is an allowlist (`[:pan, :pinch, :wheel, :double_click, :keyboard, :swipe]`) for hosts that want fewer.
 - **`pan_locked`** frees the left drag for something else (a drawing tool) while middle-drag, pinch and two-finger pan still move the view.

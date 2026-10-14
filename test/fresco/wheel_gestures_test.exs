@@ -249,22 +249,23 @@ defmodule Fresco.WheelGesturesTest do
   end
 
   describe "two fingers on a trackpad" do
-    test "move the view, the way two fingers move a page" do
-      assert [%{"gesture" => "pan", "dx" => -12, "dy" => 8}] =
+    test "move the picture the way a page's content moves under the same fingers" do
+      # The deltas are how far a page would scroll; its content moves
+      # against them.
+      assert [%{"gesture" => "pan", "dx" => 12, "dy" => -8}] =
                wheel([evt(%{"deltaX" => -12, "deltaY" => 8})])
     end
 
-    test "the picture goes the opposite way to the fingers, as a page does" do
-      # A trackpad that scrolls naturally has already inverted once: fingers
-      # pushing down-right report negative deltas on both axes. Passing
-      # those through moves the VIEW that way and the picture the other —
-      # which is what a page does under the same fingers. Inverting again
-      # made the picture follow the fingers, and it read as backwards to
-      # everyone who tried it.
+    test "the picture follows the fingers on a trackpad that scrolls naturally" do
+      # Fingers pushing down-right on a natural-scrolling trackpad (every
+      # Mac out of the box) report negative deltas on both axes, and a page
+      # under them moves down-right with them. The picture does the same:
+      # held and dragged along. 0.13 passed the deltas straight through and
+      # sent the picture up-left, the opposite of the page.
       assert [%{"gesture" => "pan", "dx" => dx, "dy" => dy}] =
                wheel([evt(%{"deltaX" => -18, "deltaY" => -24})])
 
-      assert dx < 0 and dy < 0, "down-right fingers take the view down-right"
+      assert dx > 0 and dy > 0, "down-right fingers take the picture down-right"
     end
 
     test "are recognised by a sideways component, a fraction, or a small step" do
@@ -303,7 +304,7 @@ defmodule Fresco.WheelGesturesTest do
       # For a trackpad whose OS scrolls the other way to most: the browser
       # has already applied that setting and does not say which it was, so
       # the flip has to come from the host.
-      assert [%{"gesture" => "pan", "dx" => 18, "dy" => 24}] =
+      assert [%{"gesture" => "pan", "dx" => -18, "dy" => -24}] =
                wheel([evt(%{"deltaX" => -18, "deltaY" => -24})], inverted: true)
     end
 

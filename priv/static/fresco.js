@@ -1833,20 +1833,20 @@
         return;
       }
 
-      // Two fingers moving the view over the picture. Gated on `pan` as
-      // well as `wheel`: a host that turned panning off means it, whichever
-      // device asks.
+      // Two fingers moving the picture. Gated on `pan` as well as `wheel`:
+      // a host that turned panning off means it, whichever device asks.
       //
-      // The sign is the scroll one, not the drag one: fingers pushing down
-      // take the view DOWN the picture, the way two fingers move a page,
-      // and the picture itself appears to go the other way. Reversed —
-      // the picture following the fingers, as it does under a drag — it
-      // read as backwards to everyone who tried it, because a trackpad
-      // that scrolls naturally has already done that inversion once, and
-      // doing it twice lands back where a page would never be.
+      // The sign is a page's: the deltas say how far a page would scroll,
+      // and the picture moves the way that page's content would — against
+      // the delta. On a trackpad that scrolls naturally (every Mac out of
+      // the box) that is with the fingers, the picture held and dragged
+      // along like a photo on a table. 0.13 passed the deltas straight
+      // through, so the picture went the opposite way to a page's content
+      // under the same fingers, and everyone had to flip it to get what
+      // the rest of their machine does.
       if (wheelIsFingers(e)) {
         if (gestureEnabled("pan")) {
-          var dir = twoFingerPanInverted ? -1 : 1;
+          var dir = twoFingerPanInverted ? 1 : -1;
           panRaw(dir * wheelPxX(e), dir * wheelPxY(e));
         }
         return;

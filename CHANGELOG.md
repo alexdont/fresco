@@ -28,6 +28,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `percent` alongside `scale`. `:actual_size` joins the `nav_buttons`
   names.
 
+### Changed
+
+- **Two fingers on a trackpad now move the picture with them.** The
+  wheel deltas say how far a page would scroll, and the picture now moves
+  the way that page's content does — so on a trackpad that scrolls
+  naturally (every Mac out of the box) it follows the fingers, held and
+  dragged along. 0.13 passed the deltas straight through, which sent the
+  picture the opposite way to a page under the same fingers, so people
+  had to turn on `invert_two_finger_pan` to get the direction the rest of
+  their machine uses. That attr still flips it — and a host that had set
+  it on for that reason should now leave it off.
+
 ### Docs
 
 - **The README describes the engine Fresco actually has.** Large parts of
