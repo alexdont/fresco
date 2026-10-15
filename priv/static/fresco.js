@@ -362,15 +362,21 @@
       // behind the picture — the same dots throughout, spreading out and
       // drawing in. Behind @supports because the fade at extreme zoom-out
       // needs color-mix(); without it the grid stays the fixed one above.
+      //
+      // Keyed on the variables alone (each with the static grid as its
+      // fallback), not on an attribute the engine adds: a LiveView host
+      // re-rendering the viewer strips attributes its template doesn't
+      // have, and every saved drawing snapped the grid back to the static
+      // 24px one until the next pan.
       "@supports (color: color-mix(in srgb, red 50%, transparent)) {",
-      "  .fresco-viewer[data-fresco-grid] {",
+      "  .fresco-viewer {",
       "    background-image: radial-gradient(circle,",
-      "      color-mix(in srgb, var(--fresco-grid-dot) var(--fresco-grid-alpha), transparent) var(--fresco-grid-r),",
-      "      transparent calc(var(--fresco-grid-r) + 0.75px));",
-      "    background-size: var(--fresco-grid-pitch) var(--fresco-grid-pitch);",
-      "    background-position: var(--fresco-grid-x) var(--fresco-grid-y);",
+      "      color-mix(in srgb, var(--fresco-grid-dot) var(--fresco-grid-alpha, 100%), transparent) var(--fresco-grid-r, 1px),",
+      "      transparent calc(var(--fresco-grid-r, 1px) + 0.75px));",
+      "    background-size: var(--fresco-grid-pitch, 24px) var(--fresco-grid-pitch, 24px);",
+      "    background-position: var(--fresco-grid-x, 0px) var(--fresco-grid-y, 0px);",
       "  }",
-      "  .fresco-viewer[data-fresco-grid].fresco--no-grid { background-image: none; }",
+      "  .fresco-viewer.fresco--no-grid { background-image: none; }",
       "}",
       // Stage: transformed surface holding the image(s). `transform-origin: 0 0`
       // pairs with the engine's (tx, ty, s) math. `will-change: transform` +
@@ -2300,6 +2306,7 @@
       el.removeEventListener("pointerleave", onKonamiPointerLeave);
       window.removeEventListener("keydown", onKonamiKey, true);
       if (rippleFrame) { cancelAnimationFrame(rippleFrame); rippleFrame = null; }
+      if (gridGuard) { gridGuard.disconnect(); gridGuard = null; }
       if (resizeObserver) {
         try { resizeObserver.disconnect(); } catch (_) {}
         resizeObserver = null;
@@ -2447,6 +2454,26 @@
       st.setProperty("--fresco-grid-x", offX.toFixed(2) + "px");
       st.setProperty("--fresco-grid-y", offY.toFixed(2) + "px");
       if (!el.hasAttribute("data-fresco-grid")) el.setAttribute("data-fresco-grid", "");
+    }
+
+    // The host can rewrite the viewer's own attributes — a LiveView patch
+    // resets `style` and `class` to what its template says. Whatever the
+    // grid had put there is put back straight away instead of waiting for
+    // the next pan.
+    var gridGuard = null;
+    if (typeof MutationObserver === "function" && el) {
+      gridGuard = new MutationObserver(function() {
+        // Only ever put back — a host that writes the class itself keeps it.
+        if (!gridVisible && !el.classList.contains("fresco--no-grid")) {
+          el.classList.add("fresco--no-grid");
+        }
+        if (gridVisible && gridCanvasPitch !== null &&
+            !el.style.getPropertyValue("--fresco-grid-pitch")) {
+          gridKey = "";
+          syncGrid();
+        }
+      });
+      gridGuard.observe(el, { attributes: true, attributeFilter: ["style", "class"] });
     }
 
     function mod(a, n) { return ((a % n) + n) % n; }

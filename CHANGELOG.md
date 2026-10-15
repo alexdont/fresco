@@ -68,6 +68,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   screens, gestures and events, nav-button slots, source providers, and
   the related packages. `:swipe` added to the `:gestures` docs.
 
+### Fixed
+
+- The dot grid no longer snaps back to the static 24px one after a
+  LiveView re-render of the viewer — every saved drawing on a zoomed board
+  did it, until the next pan. The grid styling reads the engine's
+  variables alone instead of an attribute the patch strips, and anything
+  a host rewrites on the viewer is put straight back.
+
 ## 0.13.3 — 2026-10-09
 
 A viewer whose controls fit a phone: the nav can be a short row along the
