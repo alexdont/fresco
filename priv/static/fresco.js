@@ -179,6 +179,7 @@
     var pointers = {};
     var wheel = null;
     var wheelQuietUntil = 0;
+    var fadeTimer = null;  // the hand-over fade, until it hides the strip
     var dead = false;
 
     function now() { return (window.performance && performance.now) ? performance.now() : Date.now(); }
@@ -341,18 +342,23 @@
             boxes[c.key] = { cx: r.cx - rect.left, cy: r.cy - rect.top, w: r.w, h: r.h, rotation: r.rotation || 0 };
           }
         }
-        root.style.opacity = "1";
-        root.style.transition = "none";
         root.style.display = "block";
         shown = true;
         if (opts.onShow) opts.onShow();
       }
+      // A gesture during the hand-over fade takes the strip back, opaque.
+      clearTimeout(fadeTimer);
+      fadeTimer = null;
+      root.style.transition = "none";
+      root.style.opacity = "1";
       layout();
       return true;
     }
 
     function hide() {
       if (!root) return;
+      clearTimeout(fadeTimer);
+      fadeTimer = null;
       root.style.display = "none";
       shown = false;
       holding = false;
@@ -371,6 +377,13 @@
     function resist(dx) {
       if ((dx > 0 && !hasNeighbour(-1)) || (dx < 0 && !hasNeighbour(1))) return dx * GALLERY_RESIST;
       return dx;
+    }
+
+    // Never further than one picture: a long drag or a trackpad's momentum
+    // would otherwise run past the neighbour and snap back to it.
+    function pull(base, dx) {
+      var span = W + GAP();
+      return Math.max(-span, Math.min(span, base + resist(dx)));
     }
 
     function finishAnimation() {
@@ -420,6 +433,10 @@
 
     function onDown(e) {
       if (dead) return;
+      // A first finger (or any mouse press) starts afresh: a pointerup that
+      // never reached us (let go outside the window) must not make this
+      // look like the second finger of a pinch.
+      if (e.isPrimary) pointers = {};
       pointers[e.pointerId] = true;
       var count = Object.keys(pointers).length;
       if (count > 1) {
@@ -466,7 +483,7 @@
       // along with it (its pointerup still reaches it, to end its own state).
       e.stopPropagation();
       sample(d, e.clientX);
-      offset = d.base + resist(dx);
+      offset = pull(d.base, dx);
       paint();
     }
 
@@ -498,16 +515,27 @@
         if (opts.canStart && !opts.canStart(e)) return;
         finishAnimation();
         if (!show()) return;
-        wheel = { base: offset, acc: 0, samples: [], timer: null };
+        wheel = { base: offset, acc: 0, samples: [], timer: null, peak: 0 };
       }
       if (e.cancelable) e.preventDefault();
       e.stopPropagation();
       var unit = e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? W : 1);
       wheel.acc -= e.deltaX * unit;
       sample(wheel, wheel.acc);
-      offset = wheel.base + resist(wheel.acc);
+      offset = pull(wheel.base, wheel.acc);
       paint();
       clearTimeout(wheel.timer);
+      // Settle as soon as the scroll has clearly decided — a full picture
+      // pulled, or past the commit point and slowing (the fingers are off
+      // and this is the trackpad's momentum) — rather than holding the strip
+      // still until the momentum runs out. The rest is swallowed.
+      wheel.peak = Math.max(wheel.peak, ax);
+      var span = W + GAP();
+      if (Math.abs(offset) >= span - 1 ||
+          (Math.abs(offset) > GALLERY_WHEEL_COMMIT * W && ax < wheel.peak * 0.5)) {
+        endWheel();
+        return;
+      }
       wheel.timer = setTimeout(endWheel, 110);
     }
 
@@ -557,9 +585,14 @@
         if (!shown || drag || wheel || animating || !cur() || cur().key !== key) return false;
         var sl = slides[key];
         var fade = function() {
-          root.style.transition = "opacity 140ms ease";
+          if (!shown || drag || wheel || animating) return;
+          root.style.transition = "opacity 180ms ease";
           root.style.opacity = "0";
-          setTimeout(function() { if (!drag && !wheel && !animating && cur() && cur().key === key) hide(); }, 150);
+          fadeTimer = setTimeout(function() {
+            fadeTimer = null;
+            if (!drag && !wheel && !animating && cur() && cur().key === key) hide();
+            else { root.style.transition = "none"; root.style.opacity = "1"; }
+          }, 190);
         };
         if (sl && sl.img && to && to.w > 0 && rect) {
           var box = { cx: to.cx - rect.left, cy: to.cy - rect.top, w: to.w, h: to.h, rotation: to.rotation || 0 };
