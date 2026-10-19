@@ -120,8 +120,473 @@
 
     registerSourceProvider: function(predicate, factory) {
       sourceProviders.unshift({ predicate: predicate, factory: factory });
+    },
+
+    // The Apple Photos way of going through pictures — see `createGallery`.
+    gallery: function(opts) {
+      return createGallery(opts);
     }
   });
+
+
+  // ===========================================================================
+  // Gallery — step through pictures the way Apple Photos does.
+  //
+  // A strip of pictures (the one being looked at and its neighbours, already
+  // decoded) laid over a host's viewer. A finger, a mouse or a sideways
+  // trackpad scroll slides the strip and the next picture comes in beside the
+  // current one; let go past a fifth of the width, or flick, and it settles on
+  // the next one, otherwise it springs back. Nothing waits on anyone: the host
+  // hears about the new picture once the strip has settled (`onChange`), and
+  // the strip keeps showing it until the host says its own viewer has painted
+  // that picture (`release`), when it hands over in place.
+  //
+  // Fresco does not know what the pictures are or where they come from. The
+  // host gives it a window of items — `{key, src, width, height, rotation,
+  // actual, kind, label}` — and says where to sit (`getRect`, inside
+  // `container` when given, else body), where a
+  // gesture may start (`getTarget`), when one may (`canStart`: at the
+  // opening zoom, not mid-annotation), and where its current picture is on
+  // screen (`getCurrentRect`) so the strip starts exactly over it.
+  //
+  //   var g = Fresco.gallery({getRect, getTarget, canStart, getCurrentRect,
+  //                           background, onChange, onShow, onHide});
+  //   g.setItems(items, index);  g.step(+1);  g.release(key, rect);
+  //   g.destroy();
+  // ===========================================================================
+
+  var GALLERY_GAP = 28;             // px between neighbouring pictures
+  var GALLERY_COMMIT = 0.2;         // of the width, to settle on a neighbour
+  var GALLERY_FLICK = 0.35;         // px/ms — a quick flick settles too
+  var GALLERY_WHEEL_COMMIT = 0.12;  // a trackpad scroll needs less travel
+  var GALLERY_RESIST = 0.32;        // past the first / last picture
+  var GALLERY_EASE = "cubic-bezier(0.22, 0.7, 0.24, 1)";
+
+  function createGallery(opts) {
+    opts = opts || {};
+    var items = [];
+    var index = 0;
+    var root = null, track = null;
+    var slides = {};       // key -> { el, img, box }
+    var boxes = {};        // key -> the box its picture was given on screen
+    var cache = {};        // src -> decoded Image, kept so it stays decoded
+    var offset = 0;        // px, how far the strip is pulled
+    var W = 0, H = 0, rect = null;
+    var shown = false;     // the strip is on screen
+    var holding = false;   // showing a picture the host has not painted yet
+    var animating = null;  // { done, timer } while settling
+    var drag = null;
+    var pointers = {};
+    var wheel = null;
+    var wheelQuietUntil = 0;
+    var dead = false;
+
+    function now() { return (window.performance && performance.now) ? performance.now() : Date.now(); }
+    function dpr() { return window.devicePixelRatio || 1; }
+    function cur() { return items[index] || null; }
+
+    function ensureRoot() {
+      if (root) return;
+      root = document.createElement("div");
+      root.className = "fresco-gallery";
+      root.setAttribute("aria-hidden", "true");
+      root.style.cssText = "position:fixed;left:0;top:0;width:0;height:0;overflow:hidden;" +
+        "pointer-events:none;display:none;z-index:" + (opts.zIndex || 1001) + ";";
+      track = document.createElement("div");
+      track.style.cssText = "position:absolute;left:0;top:0;width:100%;height:100%;will-change:transform;";
+      root.appendChild(track);
+      // Inside the host's modal when it gives one, so a top-layer or
+      // stacking-context modal cannot cover the strip.
+      (opts.container || document.body).appendChild(root);
+    }
+
+    function place() {
+      rect = opts.getRect ? opts.getRect() : null;
+      if (!rect || !rect.width || !rect.height) return false;
+      W = rect.width; H = rect.height;
+      root.style.left = rect.left + "px";
+      root.style.top = rect.top + "px";
+      root.style.width = W + "px";
+      root.style.height = H + "px";
+      root.style.background = opts.background ? (typeof opts.background === "function" ? opts.background() : opts.background) : "#000";
+      return true;
+    }
+
+    // Where a picture goes on screen: its own box (unturned), centred, at the
+    // scale the viewer opens it at — fit, or 100% for a small one when the
+    // host's viewer uses actual size.
+    function boxFor(item) {
+      if (boxes[item.key]) return boxes[item.key];
+      var rot = (((item.rotation || 0) % 360) + 360) % 360;
+      var quarter = rot === 90 || rot === 270;
+      var dec = cache[item.src];
+      var nw = item.width || (dec && dec.naturalWidth) || 0;
+      var nh = item.height || (dec && dec.naturalHeight) || 0;
+      if (!(nw > 0 && nh > 0)) return null;
+      var bw = quarter ? nh : nw, bh = quarter ? nw : nh;
+      var sc = Math.min(W / bw, H / bh);
+      if (item.actual) sc = Math.min(sc, 1 / dpr());
+      return { cx: W / 2, cy: H / 2, w: nw * sc, h: nh * sc, rotation: rot };
+    }
+
+    // Property by property rather than one cssText, so a transition set on
+    // the element carries a change of box (the hand-over glide).
+    function styleImg(img, box) {
+      var st = img.style;
+      st.position = "absolute";
+      st.userSelect = "none";
+      st.transformOrigin = "50% 50%";
+      if (!box) {
+        st.left = "0"; st.top = "0"; st.width = "100%"; st.height = "100%";
+        st.objectFit = "contain"; st.transform = "";
+        return;
+      }
+      st.objectFit = "fill";
+      st.left = (box.cx - box.w / 2) + "px";
+      st.top = (box.cy - box.h / 2) + "px";
+      st.width = box.w + "px";
+      st.height = box.h + "px";
+      st.transform = "rotate(" + (box.rotation || 0) + "deg)";
+    }
+
+    function makeSlide(item) {
+      var el = document.createElement("div");
+      el.style.cssText = "position:absolute;left:0;top:0;width:100%;height:100%;";
+      var img = null;
+      if (item.kind && item.kind !== "image") {
+        var card = document.createElement("div");
+        card.style.cssText = "position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);" +
+          "color:rgba(255,255,255,0.85);font:500 14px/1.4 ui-sans-serif,system-ui,sans-serif;" +
+          "text-align:center;padding:24px 28px;border-radius:14px;background:rgba(255,255,255,0.08);max-width:70%;";
+        card.textContent = item.label || "";
+        el.appendChild(card);
+      } else {
+        img = document.createElement("img");
+        img.alt = "";
+        img.decoding = "async";
+        img.draggable = false;
+        img.src = item.src;
+        el.appendChild(img);
+        var box = boxFor(item);
+        styleImg(img, box);
+        if (!box) {
+          // No size known yet: lay it out once it has one.
+          img.addEventListener("load", function() {
+            var b = boxFor(item);
+            if (b) styleImg(img, b);
+          }, { once: true });
+        }
+      }
+      return { el: el, img: img, item: item };
+    }
+
+    // Lay the neighbours out beside the current picture: -1, 0, +1.
+    function layout() {
+      var want = {};
+      for (var k = -1; k <= 1; k++) {
+        var item = items[index + k];
+        if (!item) continue;
+        want[item.key] = k;
+        var sl = slides[item.key];
+        if (!sl) {
+          sl = slides[item.key] = makeSlide(item);
+          track.appendChild(sl.el);
+        }
+        sl.el.style.transform = "translate3d(" + (k * (W + GAP())) + "px,0,0)";
+      }
+      Object.keys(slides).forEach(function(key) {
+        if (!(key in want)) {
+          if (slides[key].el.parentNode) slides[key].el.parentNode.removeChild(slides[key].el);
+          delete slides[key];
+        }
+      });
+      paint();
+    }
+
+    function GAP() { return GALLERY_GAP; }
+
+    function paint(transition) {
+      track.style.transition = transition || "none";
+      track.style.transform = "translate3d(" + offset + "px,0,0)";
+    }
+
+    // Keep the pictures around the current one fetched and decoded, so a
+    // swipe never shows an empty slot: two either side, the rest let go.
+    function preload() {
+      var keep = {};
+      for (var k = -2; k <= 2; k++) {
+        var item = items[index + k];
+        if (!item || !item.src || (item.kind && item.kind !== "image")) continue;
+        keep[item.src] = true;
+        if (cache[item.src]) continue;
+        var im = new Image();
+        im.decoding = "async";
+        im.src = item.src;
+        cache[item.src] = im;
+        if (im.decode) im.decode().catch(function() {});
+      }
+      Object.keys(cache).forEach(function(src) { if (!keep[src]) delete cache[src]; });
+    }
+
+    function show() {
+      ensureRoot();
+      if (!place()) return false;
+      if (!shown) {
+        // The picture on screen right now, exactly where the viewer has it,
+        // so taking over from the viewer is invisible.
+        var c = cur();
+        if (c && opts.getCurrentRect) {
+          var r = opts.getCurrentRect();
+          if (r && r.w > 0 && r.h > 0) {
+            boxes[c.key] = { cx: r.cx - rect.left, cy: r.cy - rect.top, w: r.w, h: r.h, rotation: r.rotation || 0 };
+          }
+        }
+        root.style.opacity = "1";
+        root.style.transition = "none";
+        root.style.display = "block";
+        shown = true;
+        if (opts.onShow) opts.onShow();
+      }
+      layout();
+      return true;
+    }
+
+    function hide() {
+      if (!root) return;
+      root.style.display = "none";
+      shown = false;
+      holding = false;
+      offset = 0;
+      Object.keys(slides).forEach(function(key) {
+        if (slides[key].el.parentNode) slides[key].el.parentNode.removeChild(slides[key].el);
+      });
+      slides = {};
+      boxes = {};
+      if (opts.onHide) opts.onHide();
+    }
+
+    function hasNeighbour(dir) { return !!items[index + dir]; }
+
+    // Past the first or last picture the strip still moves, but grudgingly.
+    function resist(dx) {
+      if ((dx > 0 && !hasNeighbour(-1)) || (dx < 0 && !hasNeighbour(1))) return dx * GALLERY_RESIST;
+      return dx;
+    }
+
+    function finishAnimation() {
+      if (!animating) return;
+      var a = animating;
+      animating = null;
+      clearTimeout(a.timer);
+      a.done();
+    }
+
+    function animateTo(target, velocity, done) {
+      var dist = Math.abs(target - offset);
+      var ms = Math.max(160, Math.min(420, 360 * Math.sqrt(dist / Math.max(1, W + GAP()))));
+      if (velocity && Math.abs(velocity) > 0.6) ms = Math.max(150, ms * 0.75);
+      offset = target;
+      paint("transform " + Math.round(ms) + "ms " + GALLERY_EASE);
+      animating = { done: done, timer: setTimeout(finishAnimation, ms + 30) };
+    }
+
+    // Let go: settle on a neighbour or spring back.
+    function settle(velocity, wheelGesture) {
+      var dir = offset < 0 ? 1 : -1;
+      var threshold = (wheelGesture ? GALLERY_WHEEL_COMMIT : GALLERY_COMMIT) * W;
+      var flick = Math.abs(velocity) > GALLERY_FLICK && (velocity < 0) === (dir === 1);
+      var commit = offset !== 0 && hasNeighbour(dir) && (Math.abs(offset) > threshold || flick);
+      if (!commit) {
+        animateTo(0, velocity, function() { if (!holding) hide(); });
+        return;
+      }
+      animateTo(-dir * (W + GAP()), velocity, function() { land(dir); });
+    }
+
+    function land(dir) {
+      index += dir;
+      offset = 0;
+      holding = true;
+      layout();
+      preload();
+      if (opts.onChange) opts.onChange(index, cur());
+    }
+
+    // ── pointer ──────────────────────────────────────────────────────────
+    function inTarget(e) {
+      var t = opts.getTarget ? opts.getTarget() : null;
+      return !!(t && e.target && t.contains(e.target));
+    }
+
+    function onDown(e) {
+      if (dead) return;
+      pointers[e.pointerId] = true;
+      var count = Object.keys(pointers).length;
+      if (count > 1) {
+        // A second finger is a pinch: the viewer's, not ours.
+        if (drag && drag.engaged) { drag = null; settle(0, false); }
+        drag = null;
+        return;
+      }
+      if (e.button !== 0 || !inTarget(e)) return;
+      if (opts.canStart && !opts.canStart(e)) return;
+      drag = { id: e.pointerId, x0: e.clientX, y0: e.clientY, engaged: false, samples: [] };
+    }
+
+    function sample(d, x) {
+      var t = now();
+      d.samples.push({ x: x, t: t });
+      while (d.samples.length > 2 && t - d.samples[0].t > 90) d.samples.shift();
+    }
+
+    function velocityOf(d) {
+      var sm = d.samples;
+      if (sm.length < 2) return 0;
+      var a = sm[0], b = sm[sm.length - 1];
+      var dt = b.t - a.t;
+      return dt > 0 ? (b.x - a.x) / dt : 0;
+    }
+
+    function onMove(e) {
+      var d = drag;
+      if (!d || e.pointerId !== d.id) return;
+      var dx = e.clientX - d.x0, dy = e.clientY - d.y0;
+      if (!d.engaged) {
+        if (Math.abs(dx) < 8) return;
+        if (Math.abs(dx) < Math.abs(dy) * 1.2) { drag = null; return; }
+        finishAnimation();
+        if (!show()) { drag = null; return; }
+        d.engaged = true;
+        d.base = offset;
+        d.x0 = e.clientX;
+        dx = 0;
+      }
+      if (e.cancelable) e.preventDefault();
+      // The strip has the gesture now: the viewer underneath must not pan
+      // along with it (its pointerup still reaches it, to end its own state).
+      e.stopPropagation();
+      sample(d, e.clientX);
+      offset = d.base + resist(dx);
+      paint();
+    }
+
+    function onUp(e) {
+      delete pointers[e.pointerId];
+      var d = drag;
+      if (!d || e.pointerId !== d.id) return;
+      drag = null;
+      if (!d.engaged) return;
+      settle(e.type === "pointercancel" ? 0 : velocityOf(d), false);
+    }
+
+    // ── trackpad ─────────────────────────────────────────────────────────
+    // A sideways two-finger scroll is the desktop swipe. The trackpad keeps
+    // sending its momentum after the fingers lift; those are swallowed until
+    // it goes quiet, so one flick is one picture.
+    function onWheel(e) {
+      if (dead || e.ctrlKey) return;
+      var t = now();
+      if (!wheel && t < wheelQuietUntil && inTarget(e)) {
+        wheelQuietUntil = t + 180;
+        if (e.cancelable) e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      var ax = Math.abs(e.deltaX), ay = Math.abs(e.deltaY);
+      if (!wheel) {
+        if (!inTarget(e) || ax < 3 || ax < ay * 1.3) return;
+        if (opts.canStart && !opts.canStart(e)) return;
+        finishAnimation();
+        if (!show()) return;
+        wheel = { base: offset, acc: 0, samples: [], timer: null };
+      }
+      if (e.cancelable) e.preventDefault();
+      e.stopPropagation();
+      var unit = e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? W : 1);
+      wheel.acc -= e.deltaX * unit;
+      sample(wheel, wheel.acc);
+      offset = wheel.base + resist(wheel.acc);
+      paint();
+      clearTimeout(wheel.timer);
+      wheel.timer = setTimeout(endWheel, 110);
+    }
+
+    function endWheel() {
+      var w = wheel;
+      wheel = null;
+      if (!w) return;
+      wheelQuietUntil = now() + 180;
+      settle(velocityOf(w), true);
+    }
+
+    document.addEventListener("pointerdown", onDown, true);
+    document.addEventListener("pointermove", onMove, { capture: true, passive: false });
+    document.addEventListener("pointerup", onUp, true);
+    document.addEventListener("pointercancel", onUp, true);
+    document.addEventListener("wheel", onWheel, { capture: true, passive: false });
+
+    return {
+      // The window of pictures around the current one. When the strip is
+      // up the picture on screen is found again by key, so a host refreshing
+      // its window mid-swipe never moves what is being looked at.
+      setItems: function(list, idx) {
+        var keep = shown && cur() ? cur().key : null;
+        items = Array.isArray(list) ? list.slice() : [];
+        var at = -1;
+        if (keep) for (var i = 0; i < items.length; i++) if (items[i].key === keep) { at = i; break; }
+        index = at >= 0 ? at : Math.max(0, Math.min(items.length - 1, idx | 0));
+        if (shown) layout();
+        preload();
+      },
+      // Step by one picture with the same slide — arrow keys, buttons.
+      // False when there is no neighbour that way or the strip cannot show.
+      step: function(dir) {
+        dir = dir < 0 ? -1 : 1;
+        if (dead || drag || wheel || !hasNeighbour(dir)) return false;
+        finishAnimation();
+        if (!show()) return false;
+        animateTo(-dir * (W + GAP()), 1, function() { land(dir); });
+        return true;
+      },
+      currentKey: function() { return cur() ? cur().key : null; },
+      isShown: function() { return shown; },
+      // The host has painted `key`: hand over. `to` (screen rect of the
+      // host's picture, {cx, cy, w, h}) lets the strip's picture settle onto
+      // it first, so a slightly different fit never jumps.
+      release: function(key, to) {
+        if (!shown || drag || wheel || animating || !cur() || cur().key !== key) return false;
+        var sl = slides[key];
+        var fade = function() {
+          root.style.transition = "opacity 140ms ease";
+          root.style.opacity = "0";
+          setTimeout(function() { if (!drag && !wheel && !animating && cur() && cur().key === key) hide(); }, 150);
+        };
+        if (sl && sl.img && to && to.w > 0 && rect) {
+          var box = { cx: to.cx - rect.left, cy: to.cy - rect.top, w: to.w, h: to.h, rotation: to.rotation || 0 };
+          sl.img.style.transition = "left 160ms ease, top 160ms ease, width 160ms ease, height 160ms ease";
+          void sl.img.offsetWidth; // the start box is committed before it moves
+          styleImg(sl.img, box);
+          setTimeout(function() { if (sl.img) sl.img.style.transition = ""; fade(); }, 170);
+        } else {
+          fade();
+        }
+        return true;
+      },
+      hide: hide,
+      destroy: function() {
+        dead = true;
+        document.removeEventListener("pointerdown", onDown, true);
+        document.removeEventListener("pointermove", onMove, { capture: true, passive: false });
+        document.removeEventListener("pointerup", onUp, true);
+        document.removeEventListener("pointercancel", onUp, true);
+        document.removeEventListener("wheel", onWheel, { capture: true, passive: false });
+        finishAnimation();
+        if (root && root.parentNode) root.parentNode.removeChild(root);
+        root = null;
+        cache = {};
+      }
+    };
+  }
 
   function publishReady(domId, handle) {
     viewerRegistry[domId] = handle;
@@ -2702,6 +3167,10 @@
       // The zoom in real pixels: 100 = one natural pixel per physical
       // screen pixel. Meaningful whether or not `actual_size` is on.
       getZoomPercent: zoomPercent,
+      // At the opening view (fit, or 100% for a small picture) — where a
+      // drag has nothing to pan, so a host may read it as "next picture".
+      // The same allowance the built-in swipe uses.
+      isAtHome: function() { return s <= sHome * DBL_ZOOMED; },
       zoomToActualSize: zoomToActualSize,
       toggleActualSize: toggleActualSize,
       fitToView: fitToView,
@@ -2910,6 +3379,7 @@
       getRotation: engine.getRotation,
       rotateBy: engine.rotateBy,
       getZoomPercent: engine.getZoomPercent,
+      isAtHome: engine.isAtHome,
       zoomToActualSize: engine.zoomToActualSize,
       toggleActualSize: engine.toggleActualSize,
       fitToView: engine.fitToView,
@@ -3022,6 +3492,7 @@
       swapSourcePreservingBounds: function(url) { controller.swapSourcePreservingBounds(url); },
       // Zoom in real pixels (`actual_size`) — as on the canvas handle.
       getZoomPercent:   function() { return controller.getZoomPercent(); },
+      isAtHome:         function() { return controller.isAtHome ? controller.isAtHome() : true; },
       zoomToActualSize: function() { controller.zoomToActualSize(); },
       toggleActualSize: function() { controller.toggleActualSize(); },
       fitToView:        function() { controller.fitToView(); },
@@ -3783,6 +4254,7 @@
       toggleFullscreen: engine.toggleFullscreen,
       requestHome: engine.requestHome,
       getZoomPercent: engine.getZoomPercent,
+      isAtHome: engine.isAtHome,
       zoomToActualSize: engine.zoomToActualSize,
       toggleActualSize: engine.toggleActualSize,
       fitToView: engine.fitToView,
@@ -4002,6 +4474,7 @@
       // physical screen pixel; the button's to-100%-and-back; fit whatever
       // home is.
       getZoomPercent:   function()  { return controller.getZoomPercent(); },
+      isAtHome:         function()  { return controller.isAtHome ? controller.isAtHome() : true; },
       zoomToActualSize: function()  { controller.zoomToActualSize(); },
       toggleActualSize: function()  { controller.toggleActualSize(); },
       fitToView:        function()  { controller.fitToView(); },
