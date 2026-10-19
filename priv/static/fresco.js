@@ -156,11 +156,50 @@
   // ===========================================================================
 
   var GALLERY_GAP = 28;             // px between neighbouring pictures
-  var GALLERY_COMMIT = 0.2;         // of the width, to settle on a neighbour
+  var GALLERY_COMMIT = 0.45;        // of the width, to settle on a neighbour when let go slowly
   var GALLERY_FLICK = 0.35;         // px/ms — a quick flick settles too
-  var GALLERY_WHEEL_COMMIT = 0.12;  // a trackpad scroll needs less travel
+  var GALLERY_WHEEL_COMMIT = 0.25;  // a trackpad scroll needs less travel
   var GALLERY_RESIST = 0.32;        // past the first / last picture
-  var GALLERY_EASE = "cubic-bezier(0.22, 0.7, 0.24, 1)";
+
+  var GALLERY_SPRING_W = 0.0165;   // 1/ms: a ~380ms response, as Photos pages
+  var GALLERY_MAX_FLING = 4;       // px/ms: past this a flick adds nothing
+
+  // A critically damped spring from displacement x0 (px from the target) at
+  // velocity v0 (px/ms), as {ms, ease}: the time to settle within half a
+  // pixel, and a CSS `linear()` easing tracing it. Browsers without
+  // `linear()` get the nearest cubic-bezier. Null when already there.
+  function springEasing(x0, v0) {
+    if (Math.abs(x0) < 0.5) return null;
+    // Softer over a long way, so what is left of the width after a slow
+    // release is covered at an even pace (a peak of ~3 px/ms) rather than
+    // in a rush.
+    var w = Math.min(GALLERY_SPRING_W, Math.max(0.011, Math.E * 3 / Math.abs(x0)));
+    v0 = Math.max(-GALLERY_MAX_FLING, Math.min(GALLERY_MAX_FLING, v0));
+    var pos = function(t) { return (x0 + (v0 + w * x0) * t) * Math.exp(-w * t); };
+    var ms = 120;
+    // Done within a pixel: a spring's last pixel creeps on for a long time,
+    // and everything after the glide (the server, the hand-over) waits on it.
+    while (ms < 900 && (Math.abs(pos(ms)) > 1 || Math.abs(pos(ms + 16) - pos(ms)) > 0.5)) ms += 8;
+    if (!springLinearSupported()) {
+      return { ms: Math.round(ms * 0.8), ease: "cubic-bezier(0.25, 0.9, 0.3, 1)" };
+    }
+    var pts = [];
+    var n = Math.max(16, Math.min(48, Math.round(ms / 16)));
+    for (var i = 0; i <= n; i++) {
+      var p = i === n ? 1 : 1 - pos(ms * i / n) / x0;
+      pts.push(+p.toFixed(4));
+    }
+    return { ms: Math.round(ms), ease: "linear(" + pts.join(", ") + ")" };
+  }
+
+  var springLinear = null;
+  function springLinearSupported() {
+    if (springLinear === null) {
+      springLinear = !!(window.CSS && CSS.supports &&
+        CSS.supports("transition-timing-function", "linear(0, 0.5, 1)"));
+    }
+    return springLinear;
+  }
 
   function createGallery(opts) {
     opts = opts || {};
@@ -180,6 +219,7 @@
     var wheel = null;
     var wheelQuietUntil = 0;
     var fadeTimer = null;  // the hand-over fade, until it hides the strip
+    var swipedAt = 0;      // when a swipe last let go
     var dead = false;
 
     function now() { return (window.performance && performance.now) ? performance.now() : Date.now(); }
@@ -262,14 +302,20 @@
         card.textContent = item.label || "";
         el.appendChild(card);
       } else {
-        img = document.createElement("img");
+        // The preloaded, already decoded image itself when it is free, so
+        // the first frame of a swipe has nothing left to decode.
+        var pre = cache[item.src];
+        img = pre && !pre.parentNode ? pre : document.createElement("img");
         img.alt = "";
-        img.decoding = "async";
         img.draggable = false;
-        img.src = item.src;
+        if (img !== pre) { img.decoding = "async"; img.src = item.src; }
         el.appendChild(img);
         var box = boxFor(item);
         styleImg(img, box);
+        if (!box && img.complete && img.naturalWidth) {
+          box = boxFor(item);
+          styleImg(img, box);
+        }
         if (!box) {
           // No size known yet: lay it out once it has one.
           img.addEventListener("load", function() {
@@ -306,7 +352,15 @@
 
     function GAP() { return GALLERY_GAP; }
 
+    // One paint a frame however many moves arrive in it.
+    var paintFrame = 0;
+    function paintSoon() {
+      if (paintFrame) return;
+      paintFrame = requestAnimationFrame(function() { paintFrame = 0; if (!animating) paint(); });
+    }
+
     function paint(transition) {
+      if (paintFrame) { cancelAnimationFrame(paintFrame); paintFrame = 0; }
       track.style.transition = transition || "none";
       track.style.transform = "translate3d(" + offset + "px,0,0)";
     }
@@ -394,26 +448,74 @@
       a.done();
     }
 
+    // Glide to `target` on a critically damped spring — the motion Apple
+    // Photos uses. It starts at the finger's speed (`velocity`, px/ms; 0 for
+    // a key press) and is pulled into place with no burst and no bounce, so
+    // letting go reads as the picture carrying on rather than jumping. The
+    // spring is sampled into a CSS `linear()` easing, so the glide is still a
+    // transition and runs on the compositor even while the page is busy.
     function animateTo(target, velocity, done) {
-      var dist = Math.abs(target - offset);
-      var ms = Math.max(160, Math.min(420, 360 * Math.sqrt(dist / Math.max(1, W + GAP()))));
-      if (velocity && Math.abs(velocity) > 0.6) ms = Math.max(150, ms * 0.75);
+      var x0 = offset - target;
+      // A key press has no finger speed to carry on: a plain ease, brisk.
+      var spring = velocity == null
+        ? (Math.abs(x0) < 0.5 ? null : { ms: 380, ease: "cubic-bezier(0.32, 0.08, 0.24, 1)" })
+        : springEasing(x0, velocity);
       offset = target;
-      paint("transform " + Math.round(ms) + "ms " + GALLERY_EASE);
-      animating = { done: done, timer: setTimeout(finishAnimation, ms + 30) };
+      if (!spring) { paint(); done(); return; }
+      paint("transform " + spring.ms + "ms " + spring.ease);
+      animating = { done: done, timer: setTimeout(finishAnimation, spring.ms + 30) };
     }
 
-    // Let go: settle on a neighbour or spring back.
-    function settle(velocity, wheelGesture) {
-      var dir = offset < 0 ? 1 : -1;
-      var threshold = (wheelGesture ? GALLERY_WHEEL_COMMIT : GALLERY_COMMIT) * W;
-      var flick = Math.abs(velocity) > GALLERY_FLICK && (velocity < 0) === (dir === 1);
-      var commit = offset !== 0 && hasNeighbour(dir) && (Math.abs(offset) > threshold || flick);
-      if (!commit) {
-        animateTo(0, velocity, function() { if (!holding) hide(); });
-        return;
+    // Catch the strip mid-glide, where it is on screen right now, the way a
+    // finger catches a sliding photo — so a swipe never waits for the last
+    // one to finish. A glide that was going to a neighbour has arrived as
+    // far as counting goes (the picture is current, the host is told); only
+    // the drawing stays where the finger caught it.
+    function catchAnimation() {
+      if (!animating) return;
+      var page = animating.page || 0;
+      clearTimeout(animating.timer);
+      animating = null;
+      var x = offset;
+      try { x = new DOMMatrix(window.getComputedStyle(track).transform).m41; } catch (_e) {}
+      offset = x;
+      if (page) {
+        index += page;
+        offset += page * (W + GAP());
+        holding = true;
+        layout();
+        preload();
+        if (opts.onChange) opts.onChange(index, cur());
+      } else {
+        paint();
       }
-      animateTo(-dir * (W + GAP()), velocity, function() { land(dir); });
+    }
+
+    // Let go: a flick goes one picture on in its direction — from the
+    // picture the strip counts itself on, so quick flicks in a row each go
+    // one further, even caught mid-glide. Let go slowly, it settles on the
+    // nearest picture (past `GALLERY_COMMIT` of the way counts as nearer).
+    function settle(velocity, wheelGesture) {
+      var span = W + GAP();
+      var pos = -offset / span;  // in pictures: +1 is the next one, centred
+      var commitAt = wheelGesture ? GALLERY_WHEEL_COMMIT : GALLERY_COMMIT;
+      var page;
+      if (Math.abs(velocity) > GALLERY_FLICK) {
+        page = velocity < 0 ? 1 : -1;
+      } else {
+        page = Math.abs(pos) > commitAt ? (pos > 0 ? 1 : -1) : 0;
+      }
+      if (page && !hasNeighbour(page)) page = 0;
+      glideTo(page, velocity);
+    }
+
+    // Glide so that picture `page` (-1, 0, +1 from the current) is centred.
+    function glideTo(page, velocity) {
+      var done = page
+        ? function() { land(page); }
+        : function() { if (!holding) hide(); };
+      animateTo(-page * (W + GAP()), velocity, done);
+      if (animating) animating.page = page;
     }
 
     function land(dir) {
@@ -471,7 +573,7 @@
       if (!d.engaged) {
         if (Math.abs(dx) < 8) return;
         if (Math.abs(dx) < Math.abs(dy) * 1.2) { drag = null; return; }
-        finishAnimation();
+        catchAnimation();
         if (!show()) { drag = null; return; }
         d.engaged = true;
         d.base = offset;
@@ -484,7 +586,7 @@
       e.stopPropagation();
       sample(d, e.clientX);
       offset = pull(d.base, dx);
-      paint();
+      paintSoon();
     }
 
     function onUp(e) {
@@ -493,6 +595,7 @@
       if (!d || e.pointerId !== d.id) return;
       drag = null;
       if (!d.engaged) return;
+      swipedAt = now();
       settle(e.type === "pointercancel" ? 0 : velocityOf(d), false);
     }
 
@@ -513,7 +616,7 @@
       if (!wheel) {
         if (!inTarget(e) || ax < 3 || ax < ay * 1.3) return;
         if (opts.canStart && !opts.canStart(e)) return;
-        finishAnimation();
+        catchAnimation();
         if (!show()) return;
         wheel = { base: offset, acc: 0, samples: [], timer: null, peak: 0 };
       }
@@ -547,6 +650,20 @@
       settle(velocityOf(w), true);
     }
 
+    // Browsers still fire click after a drag, so two quick swipes made a
+    // double-click — and the viewer underneath zoomed in on it, which then
+    // refused the next swipe. Neither is the person's: swallow them.
+    function onClick(e) {
+      if (dead) return;
+      var t = now() - swipedAt;
+      if ((e.type === "click" && t < 80) || (e.type === "dblclick" && t < 700)) {
+        e.stopPropagation();
+        e.preventDefault();
+      }
+    }
+
+    document.addEventListener("click", onClick, true);
+    document.addEventListener("dblclick", onClick, true);
     document.addEventListener("pointerdown", onDown, true);
     document.addEventListener("pointermove", onMove, { capture: true, passive: false });
     document.addEventListener("pointerup", onUp, true);
@@ -570,13 +687,17 @@
       // False when there is no neighbour that way or the strip cannot show.
       step: function(dir) {
         dir = dir < 0 ? -1 : 1;
-        if (dead || drag || wheel || !hasNeighbour(dir)) return false;
-        finishAnimation();
-        if (!show()) return false;
-        animateTo(-dir * (W + GAP()), 1, function() { land(dir); });
+        if (dead || drag || wheel) return false;
+        catchAnimation();
+        if (!hasNeighbour(dir) || !show()) return false;
+        animateTo(-dir * (W + GAP()), null, function() { land(dir); });
+        if (animating) animating.page = dir;
         return true;
       },
       currentKey: function() { return cur() ? cur().key : null; },
+      // In the middle of a gesture or a glide: a host can hold back heavy
+      // work (re-rendering its viewer) until the strip is still.
+      isBusy: function() { return !!((drag && drag.engaged) || wheel || animating); },
       isShown: function() { return shown; },
       // The host has painted `key`: hand over. `to` (screen rect of the
       // host's picture, {cx, cy, w, h}) lets the strip's picture settle onto
@@ -608,6 +729,8 @@
       hide: hide,
       destroy: function() {
         dead = true;
+        document.removeEventListener("click", onClick, true);
+        document.removeEventListener("dblclick", onClick, true);
         document.removeEventListener("pointerdown", onDown, true);
         document.removeEventListener("pointermove", onMove, { capture: true, passive: false });
         document.removeEventListener("pointerup", onUp, true);
