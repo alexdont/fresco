@@ -3758,6 +3758,7 @@
       // exists, and `object-fit` is the one declaration the per-frame math
       // below does not overwrite.
       im.style.objectFit = "";
+      if (im.hasAttribute("data-fresco-prefit")) im.style.transform = ""; // actual_size centring
       im.removeAttribute("data-fresco-prefit");
     }
     imgs.forEach(applyImgResets);

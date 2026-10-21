@@ -948,6 +948,7 @@ defmodule Fresco.Canvas do
       tabindex="0"
       {@rest}
     >
+      <style :if={@prefit? && @actual_size}><%= dpr_css() %></style>
       <div class="fresco-stage" data-fresco-stage style={stage_style(@bg_style, @prefit?)}>
         <%= for img <- @sorted_images do %>
           <img
@@ -960,7 +961,7 @@ defmodule Fresco.Canvas do
             data-canvas-height={canvas_image_height(img)}
             data-z-index={Map.get(img, :z_index, 0)}
             data-fresco-prefit={@prefit? && "true"}
-            style={image_style(img, @prefit?)}
+            style={image_style(img, @prefit? && if(@actual_size, do: :actual, else: true))}
             draggable="false"
             alt=""
           />
@@ -1061,6 +1062,45 @@ defmodule Fresco.Canvas do
   end
 
   defp stage_style(bg_style, _), do: bg_style
+
+  # Device pixel ratio as a CSS custom property, for the pre-mount paint of
+  # an `actual_size` canvas below. Media queries are the only way CSS can
+  # see it; the steps cover the ratios screens and browser zoom produce, and
+  # an in-between ratio takes the step below (a slightly bigger first paint
+  # the engine then trims, rather than the whole fit-to-viewer jump).
+  @dpr_steps [1.25, 1.5, 1.75, 2, 2.5, 3, 3.5, 4]
+  defp dpr_css do
+    Enum.map_join(@dpr_steps, " ", fn d ->
+      "@media (min-resolution: #{d}dppx), (-webkit-min-device-pixel-ratio: #{d}) " <>
+        "{ :root { --fresco-dpr: #{d}; } }"
+    end)
+  end
+
+  # A lone image filling its canvas paints CSS-contained before the engine
+  # exists. With `actual_size` the engine's home never enlarges past 100% —
+  # one canvas pixel per physical screen pixel — so the preview is capped at
+  # that too, centred, or a small picture opens fitted to the viewer and
+  # then shrinks once the socket connects.
+  defp image_style(img, :actual) do
+    w = img.width
+    h = canvas_image_height(img)
+
+    cap =
+      ["max-width:calc(#{w}px / var(--fresco-dpr, 1));"] ++
+        if(h, do: ["max-height:calc(#{h}px / var(--fresco-dpr, 1));"], else: ["max-height:100%;"])
+
+    base =
+      [
+        "position:absolute;",
+        "left:50%; top:50%; transform:translate(-50%, -50%);",
+        "width:100%; height:100%;"
+      ] ++ cap ++ ["object-fit:contain;"]
+
+    case Map.get(img, :z_index) do
+      nil -> Enum.join(base, " ")
+      z -> Enum.join(base ++ ["z-index:#{z};"], " ")
+    end
+  end
 
   defp image_style(img, true) do
     base = [

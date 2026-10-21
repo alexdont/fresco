@@ -307,6 +307,32 @@ defmodule FrescoTest do
       assert html =~ ~s(data-fresco-prefit="true")
     end
 
+    test "with actual_size the pre-mount paint never enlarges past 100%" do
+      # The engine's home with `actual_size` is min(fit, 100%). A preview
+      # that only contains against the viewer opened a 254px GIF filling the
+      # popup, then shrank it once the socket connected.
+      canvas =
+        build_canvas(
+          width: 254,
+          height: 335,
+          images: [
+            %{src: "/a.gif", x: 0, y: 0, width: 254, natural_width: 254, natural_height: 335}
+          ]
+        )
+
+      html = render_component(&Fresco.canvas/1, id: "b", canvas: canvas, actual_size: true)
+
+      assert html =~ "max-width:calc(254px / var(--fresco-dpr, 1));"
+      assert html =~ "max-height:calc(335.0px / var(--fresco-dpr, 1));"
+      assert html =~ "transform:translate(-50%, -50%);"
+      assert html =~ "--fresco-dpr: 2;", "the ratio comes from media queries in the markup"
+      assert html =~ ~s(data-fresco-prefit="true")
+
+      plain = render_component(&Fresco.canvas/1, id: "b", canvas: canvas)
+      refute plain =~ "--fresco-dpr"
+      assert plain =~ "max-width:100%; max-height:100%;"
+    end
+
     test "a lone image smaller than its canvas keeps canvas-pixel sizing" do
       # The preview fills the viewer; the engine fits the whole CANVAS, which
       # for an image occupying part of it is a different picture. Painting one
