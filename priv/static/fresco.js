@@ -2630,7 +2630,7 @@
       zoomPct = document.createElement("button");
       zoomPct.type = "button";
       zoomPct.className = "fresco-zoom-pct";
-      zoomPct.title = "Zoom";
+      zoomPct.title = "Fit to screen";
       zoomPct.setAttribute("aria-expanded", "false");
       zoomCtl.appendChild(zoomTrack);
       zoomCtl.appendChild(zoomPct);
@@ -2647,9 +2647,18 @@
       zoomPct.addEventListener("pointerdown", function(e) { pressedWith = e.pointerType; });
       zoomPct.addEventListener("click", function(e) {
         e.stopPropagation();
-        // A mouse has already opened it by hovering; its click keeps it so.
-        setZoomOpen(pressedWith === "mouse" || !zoomCtl.hasAttribute("data-open"));
+        // The percentage is also a way back: a click fits the picture to the
+        // view (what the 1:1 button does on its second press), and a second
+        // click returns to home where that is not the fit — a small picture's
+        // 100%. The slider stays open (a mouse opened it by hovering; a tap
+        // opens it here), so the zoom can be set from there.
+        setZoomOpen(true);
         pressedWith = null;
+        cancelAnimation();
+        refresh();
+        if (atScale(sFit) && !atScale(sHome)) requestHome();
+        else fitToView();
+        emitZoom();
       });
       zoomCtl.addEventListener("dblclick", function(e) { e.stopPropagation(); });
       zoomCtl.addEventListener("wheel", function(e) { e.stopPropagation(); }, { passive: true });
