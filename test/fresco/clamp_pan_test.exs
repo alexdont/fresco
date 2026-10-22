@@ -33,6 +33,7 @@ defmodule Fresco.ClampPanTest do
       var tx = #{opts[:tx]}, ty = #{opts[:ty]};
       var infiniteCanvas = false;
       var customPanBounds = #{opts[:bounds]};
+      var panCentreBounds = #{opts[:centre_bounds] || false};
       var content = #{opts[:content]};
       function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
       function rotatedRectBBox(r) {
@@ -106,5 +107,23 @@ defmodule Fresco.ClampPanTest do
 
     # tx is clamped to -bbox.minX = 400: the far edge of the spill.
     assert got["tx"] == 400.0, "panning reaches the ink outside the picture"
+  end
+
+  test "with pan_centre: :bounds, a too-small axis centres the custom rect" do
+    # Opt-in for a host that frames the picture and its ink as one (the
+    # media viewer, matching its flat burned copy): the rect is centred.
+    got =
+      clamp(
+        vw: 1000,
+        vh: 800,
+        tx: 0,
+        ty: 0,
+        bounds: "{x: -200, y: 0, width: 600, height: 300}",
+        content: "{x: 0, y: 0, width: 400, height: 300}",
+        centre_bounds: true
+      )
+
+    assert got["tx"] == (1000 - 600) / 2 + 200
+    assert got["ty"] == (800 - 300) / 2
   end
 end

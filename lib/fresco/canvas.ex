@@ -673,6 +673,19 @@ defmodule Fresco.Canvas do
     """
   )
 
+  attr(:pan_centre, :atom,
+    values: [:content, :bounds],
+    default: :content,
+    doc: """
+    What is centred when everything the view may pan over fits on screen.
+    `:content` (the default) centres the canvas itself, even when a peer
+    has widened the pan bounds (Etcher does, to reach ink drawn past the
+    picture) — so ink arriving on one side never shoves the picture the
+    other way. `:bounds` centres the widened bounds instead: picture and
+    ink as one, framed the way a flat copy of both would be.
+    """
+  )
+
   attr(:invert_two_finger_pan, :boolean,
     default: false,
     doc: """
@@ -926,6 +939,7 @@ defmodule Fresco.Canvas do
       data-zoom-ceiling={@zoom_ceiling && to_string(@zoom_ceiling)}
       data-pan-locked={@pan_locked && "true"}
       data-invert-two-finger-pan={@invert_two_finger_pan && "true"}
+      data-pan-centre={@pan_centre == :bounds && "bounds"}
       data-actual-size={@actual_size && "true"}
       data-nav-layout={@nav_layout == :row && "row"}
       data-nav-reverse={@nav_reverse && "true"}

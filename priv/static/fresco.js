@@ -1562,6 +1562,7 @@
     if (!isNaN(ceil) && ceil > 0) opts.zoomCeiling = ceil;
     if (el.dataset.panLocked === "true") opts.panLocked = true;
     if (el.dataset.invertTwoFingerPan === "true") opts.invertTwoFingerPan = true;
+    if (el.dataset.panCentre === "bounds") opts.panCentreBounds = true;
     if (el.dataset.actualSize === "true") opts.actualSize = true;
     if (el.dataset.navLayout === "row") opts.navLayout = "row";
     if (el.dataset.navReverse === "true") opts.navReverse = true;
@@ -1628,6 +1629,8 @@
     var initialZoomCeiling = opts.zoomCeiling;
     var initialPanLocked   = !!opts.panLocked;
     var initialInvertTwoFingerPan = !!opts.invertTwoFingerPan;
+    // `pan_centre: :bounds` — see clampPan.
+    var panCentreBounds = !!opts.panCentreBounds;
     // Zoom in real pixels (`actual_size`): 100% is one natural pixel per
     // physical screen pixel, and the home view is fit or 100%, whichever
     // is smaller — see `sHome`.
@@ -1817,7 +1820,11 @@
       // one side shoved the picture the other way, by half the spill, the
       // moment the annotations loaded — the image visibly settling
       // sideways under the viewer.
-      var centre = customPanBounds ? rotatedContentBBox() : bbox;
+      //
+      // Unless the host asks for the bounds to be centred (`pan_centre:
+      // :bounds`): a host showing the same drawing elsewhere as one flat
+      // picture of the picture-plus-ink wants this view framed like it.
+      var centre = (customPanBounds && !panCentreBounds) ? rotatedContentBBox() : bbox;
       if (bw >= vw) {
         tx = clamp(tx, vw - bbox.maxX, -bbox.minX);
       } else {
@@ -3303,6 +3310,10 @@
       // outside the picture) read it first so they can restore the
       // HOST'S floor, not blindly null it.
       getZoomFloor: function() { return customSMin; },
+      // "bounds" when the host asked for widened pan bounds to be centred
+      // (`pan_centre: :bounds`), "content" otherwise. A peer that widens
+      // them (Etcher) shapes them to suit.
+      getPanCentre: function() { return panCentreBounds ? "bounds" : "content"; },
       setZoomCeiling: setZoomCeiling,
       setPanLocked: setPanLocked,
       setTwoFingerPanInverted: setTwoFingerPanInverted,
@@ -3536,6 +3547,7 @@
       setTransform: engine.setTransform,
       setZoomFloor: engine.setZoomFloor,
       getZoomFloor: engine.getZoomFloor,
+      getPanCentre: engine.getPanCentre,
       setZoomCeiling: engine.setZoomCeiling,
       setPanLocked: engine.setPanLocked,
       setTwoFingerPanInverted: engine.setTwoFingerPanInverted,
@@ -3817,6 +3829,7 @@
       zoomCeiling: canvasAttrOpts.zoomCeiling,
       panLocked: canvasAttrOpts.panLocked,
       invertTwoFingerPan: canvasAttrOpts.invertTwoFingerPan,
+      panCentreBounds: canvasAttrOpts.panCentreBounds,
       actualSize: canvasAttrOpts.actualSize,
       navLayout: canvasAttrOpts.navLayout,
       navOverflow: canvasAttrOpts.navOverflow,
@@ -4396,6 +4409,7 @@
       setTransform: engine.setTransform,
       setZoomFloor: engine.setZoomFloor,
       getZoomFloor: engine.getZoomFloor,
+      getPanCentre: engine.getPanCentre,
       setZoomCeiling: engine.setZoomCeiling,
       setPanLocked: engine.setPanLocked,
       setTwoFingerPanInverted: engine.setTwoFingerPanInverted,
@@ -4591,6 +4605,7 @@
       // the start but the canvas handle's surface never re-exported
       // them — a leak fixed here.
       setPanBounds:   function(b) { controller.setPanBounds(b); },
+      getPanCentre:   function() { return controller.getPanCentre ? controller.getPanCentre() : "content"; },
       // Forwarded for the peers that manage pan bounds (Etcher's
       // outside-the-picture ink): they must know whether a clamp exists
       // to loosen, and they treat a handle that cannot answer as
