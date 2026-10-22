@@ -135,7 +135,7 @@
   // A strip of pictures (the one being looked at and its neighbours, already
   // decoded) laid over a host's viewer. A finger, a mouse or a sideways
   // trackpad scroll slides the strip and the next picture comes in beside the
-  // current one; let go past a fifth of the width, or flick, and it settles on
+  // current one; let go nearly halfway across, or flick, and it settles on
   // the next one, otherwise it springs back. Nothing waits on anyone: the host
   // hears about the new picture once the strip has settled (`onChange`), and
   // the strip keeps showing it until the host says its own viewer has painted

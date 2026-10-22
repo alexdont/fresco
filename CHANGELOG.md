@@ -4,6 +4,54 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.15.0 — 2026-10-22
+
+### Added
+
+- **`Fresco.gallery(opts)`** — step through pictures the way Apple Photos
+  does. A strip of decoded pictures (the current one and its neighbours)
+  is laid over the host's viewer; a finger, a mouse drag or a sideways
+  trackpad scroll slides it, the next picture coming in beside the
+  current one. Let go nearly halfway across, or flick, and it settles on
+  the neighbour; otherwise it springs back. The motion is a critically
+  damped spring sampled into a CSS `linear()` easing, so it runs on the
+  compositor and carries the release speed. A flick during a glide is
+  taken at once — quick swipes are never dropped or made to wait for the
+  last animation — and the arrow keys step on a fixed curve. Nothing waits
+  on the host: `onChange` reports the new picture once the strip settles,
+  and the strip keeps showing it until the host's own viewer has painted
+  it (`release(key, rect)`), when it hands over in place. The host
+  supplies a window of items (`{key, src, width, height, rotation,
+  actual, kind, label}`) and says where to sit (`getRect`, inside
+  `container`), where a gesture may start (`getTarget`), when one may
+  (`canStart`) and where its picture is on screen (`getCurrentRect`).
+  Handles: `setItems`, `step`, `release`, `isBusy`, `currentKey`,
+  `isShown`, `hide`, `destroy`; callbacks `onChange`, `onShow`, `onHide`.
+- **`pan_centre`** on `<Fresco.canvas>` (`:content` by default, or
+  `:bounds`) — what is centred when everything the view may pan over fits
+  on screen. `:bounds` centres the pan bounds a peer has widened (Etcher
+  does, for ink drawn past the picture) instead of the canvas itself,
+  framing picture and ink as one, the way a flat copy of both would be.
+  Every handle reports it as `getPanCentre()`.
+- **`handle.isAtHome()`** — whether the view is at its opening zoom.
+
+### Changed
+
+- **A click on the zoom percentage fits the picture to the view**, as the
+  actual-size button's second press does; a second click goes back to the
+  opening view where that is not the fit (a small picture's 100%). The
+  slider still opens, by hover or by the tap.
+
+### Fixed
+
+- **An `actual_size` canvas no longer opens fitted and then shrinks.**
+  Before the hook mounts, a lone image painted contained against the
+  viewer, so a picture smaller than the viewer opened enlarged to fill it
+  — for a second or more on a page loaded from a link — and shrank to
+  100% once the socket connected. The preview is now capped at one canvas
+  pixel per physical screen pixel, centred, as the engine's opening view
+  is.
+
 ## 0.14.0 — 2026-10-15
 
 ### Added
