@@ -28,8 +28,11 @@ defmodule Fresco.WheelGesturesTest do
     String.to_float(v)
   end
 
+  # Within the transform engine: the gallery above it has helpers of the
+  # same names (its own `onWheel`, for one).
   defp lift(src, head) do
-    start = :binary.match(src, head) |> elem(0)
+    {engine, _} = :binary.match(src, "  function createTransformEngine(opts) {")
+    {start, _} = :binary.match(src, head, scope: {engine, byte_size(src) - engine})
     rest = binary_part(src, start, byte_size(src) - start)
     binary_part(rest, 0, :binary.match(rest, "\n    }") |> elem(0)) <> "\n    }"
   end

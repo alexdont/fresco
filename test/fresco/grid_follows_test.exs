@@ -149,14 +149,22 @@ defmodule Fresco.GridFollowsTest do
     # alone, never an attribute a LiveView patch would strip (a saved
     # drawing used to snap the grid back to the static one until a pan).
     refute src =~ ~s(.fresco-viewer[data-fresco-grid] {)
-    assert src =~ ~S|background-size: var(--fresco-grid-pitch, 24px) var(--fresco-grid-pitch, 24px);|
+
+    assert src =~
+             ~S|background-size: var(--fresco-grid-pitch, 24px) var(--fresco-grid-pitch, 24px);|
+
     assert src =~ ~s(.fresco-viewer.fresco--no-grid { background-image: none; })
   end
 
   test "a host rewriting the viewer's attributes gets the grid put straight back" do
     src = File.read!(@source)
-    assert src =~ ~S|gridGuard.observe(el, { attributes: true, attributeFilter: ["style", "class"] });|
-    assert src =~ ~r/!el\.style\.getPropertyValue\("--fresco-grid-pitch"\)\) \{\s*gridKey = "";\s*syncGrid\(\);/
+
+    assert src =~
+             ~S|gridGuard.observe(el, { attributes: true, attributeFilter: ["style", "class"] });|
+
+    assert src =~
+             ~r/!el\.style\.getPropertyValue\("--fresco-grid-pitch"\)\) \{\s*gridKey = "";\s*syncGrid\(\);/
+
     assert src =~ "if (gridGuard) { gridGuard.disconnect(); gridGuard = null; }"
   end
 

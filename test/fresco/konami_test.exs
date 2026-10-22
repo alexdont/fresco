@@ -54,7 +54,9 @@ defmodule Fresco.KonamiTest do
   end
 
   test "a slip resets it, and an ↑ after the slip starts it again" do
-    assert %{"ripples" => 0} = run(~s([["ArrowUp"],["ArrowUp"],["ArrowLeft"],["ArrowDown"],["ArrowDown"]]))
+    assert %{"ripples" => 0} =
+             run(~s([["ArrowUp"],["ArrowUp"],["ArrowLeft"],["ArrowDown"],["ArrowDown"]]))
+
     assert %{"ripples" => 1} = run(~s([["ArrowUp"],["x"],#{@code}]))
   end
 
