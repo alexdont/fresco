@@ -24,6 +24,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   higher-resolution copy to export when the stage shows a screen-sized
   variant; the long side is capped at 4000 px. Emits `fresco:exported` /
   `fresco:export-failed`. Off by default.
+- **Export layers.** `handle.addExportLayer(fn)` lets an extension put its
+  own drawing in the PDF, over the pictures: `fn(opts)` returns (or
+  resolves) entries in the pictures' coordinate space, usually an SVG
+  `data:` URL. Etcher uses it, so a board's shapes, notes and text are in
+  the export, and a board with no pictures at all exports too. A layer that
+  fails fails the export rather than leaving half the board out.
 
 ## 0.15.0 — 2026-10-22
 

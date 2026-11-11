@@ -1489,12 +1489,41 @@
     });
   }
 
+  // What extensions draw over the pictures (Etcher's shapes): each layer added
+  // with `handle.addExportLayer(fn)` is asked at export time, `fn(opts)`
+  // returning (or resolving) entries in the same coordinate space as the
+  // pictures — `{src, x, y, width, height}`, usually an SVG data: URL. A
+  // layer that fails fails the export: a PDF missing half the board is worse
+  // than none.
+  function exportLayerEntries(el, opts) {
+    var layers = (el && el.__frescoExportLayers) || [];
+    return Promise.all(layers.map(function(fn) {
+      return Promise.resolve().then(function() { return fn(opts); });
+    })).then(function(lists) {
+      var out = [];
+      lists.forEach(function(l) { if (Array.isArray(l)) out = out.concat(l.filter(Boolean)); else if (l) out.push(l); });
+      return out;
+    });
+  }
+
+  function addExportLayer(el, fn) {
+    if (!el || typeof fn !== "function") return function() {};
+    var layers = el.__frescoExportLayers || (el.__frescoExportLayers = []);
+    layers.push(fn);
+    return function() {
+      var i = layers.indexOf(fn);
+      if (i !== -1) layers.splice(i, 1);
+    };
+  }
+
   // The file name: the host's (`export_filename`), else the first picture's.
   function exportName(el, entries) {
     var named = el && el.dataset && el.dataset.exportFilename;
     var base = named || "";
-    if (!base && entries[0] && entries[0].src) {
-      base = decodeURIComponent(entries[0].src.split(/[?#]/)[0].split("/").pop() || "");
+    // A drawn layer (see `addExportLayer`) is a data: URL: no name in it.
+    var first = entries.filter(function(e) { return e.src && !/^(data|blob):/i.test(e.src); })[0];
+    if (!base && first) {
+      base = decodeURIComponent(first.src.split(/[?#]/)[0].split("/").pop() || "");
     }
     base = base.replace(/\.[a-z0-9]{2,5}$/i, "").replace(/[\\/:*?"<>|]+/g, "_") || "picture";
     return base + ".pdf";
@@ -1504,8 +1533,16 @@
   // caller that wants it without the download: `opts.download === false`).
   function exportPdf(el, entries, rotation, opts) {
     opts = opts || {};
-    var name = opts.filename || exportName(el, entries);
-    return composeForExport(entries, rotation).then(function(r) {
+    var name;
+    return exportLayerEntries(el, opts).then(function(drawn) {
+      // Drawn layers go over the pictures, in the order they were added.
+      var top = entries.reduce(function(m, e) { return Math.max(m, e.z || 0); }, 0);
+      entries = entries.concat(drawn.map(function(e, i) {
+        return Object.assign({}, e, { z: top + 1 + i });
+      }));
+      name = opts.filename || exportName(el, entries);
+      return composeForExport(entries, rotation);
+    }).then(function(r) {
       var bytes = pdfFromJpeg(r.jpeg, r.width, r.height, name.replace(/\.pdf$/i, ""));
       var blob = new Blob([bytes], { type: "application/pdf" });
       if (opts.download !== false) {
@@ -3911,6 +3948,9 @@
       // One-page PDF of what the viewer shows; resolves the Blob. Pass
       // `{download: false}` to keep it, `{filename}` to name it.
       exportPdf:      function(o) { return controller.exportPdf(o); },
+      // An extension's drawing in the PDF, over the pictures (see
+      // `exportLayerEntries`). Returns the remover.
+      addExportLayer: function(fn) { return addExportLayer(el, fn); },
       rotateBy:       function(delta) { controller.rotateBy(delta); },
       // Named quarter-turn helpers (right = +90 CW, left = -90 CCW), the
       // twins of the two rotate nav buttons. Both persist like the buttons.
@@ -4879,6 +4919,9 @@
       // One-page PDF of what the viewer shows; resolves the Blob. Pass
       // `{download: false}` to keep it, `{filename}` to name it.
       exportPdf:      function(o) { return controller.exportPdf(o); },
+      // An extension's drawing in the PDF, over the pictures (see
+      // `exportLayerEntries`). Returns the remover.
+      addExportLayer: function(fn) { return addExportLayer(el, fn); },
       rotateBy:       function(delta) { controller.rotateBy(delta); },
       // Named quarter-turn helpers (right = +90 CW, left = -90 CCW), the
       // twins of the two rotate nav buttons. Both fire the `rotate` event,

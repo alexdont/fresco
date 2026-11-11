@@ -189,7 +189,10 @@ defmodule Fresco.Viewer do
     one-page A4 PDF, on white, in the browser: no server round trip and no
     library. `handle.exportPdf(opts)` does the same from a host's own button
     (`{filename: "…"}`, `{download: false}` to get the `Blob` back). The
-    element emits `fresco:exported` or `fresco:export-failed`. Pictures from
+    element emits `fresco:exported` or `fresco:export-failed`. An extension
+    adds what it draws with `handle.addExportLayer(fn)` — Etcher puts every
+    shape of the board on the page this way, whole, not just what is on
+    screen. Pictures from
     another origin need CORS, or the browser will not let them be read back.
     Off by default.
     """

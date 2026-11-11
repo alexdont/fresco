@@ -55,7 +55,11 @@ defmodule Fresco.PdfExportTest do
       assert binary_part(bytes, xref_at, 4) == "xref"
 
       table = binary_part(bytes, xref_at, byte_size(bytes) - xref_at)
-      offsets = Regex.scan(~r/^(\d{10}) 00000 n $/m, table) |> Enum.map(fn [_, o] -> String.to_integer(o) end)
+
+      offsets =
+        Regex.scan(~r/^(\d{10}) 00000 n $/m, table)
+        |> Enum.map(fn [_, o] -> String.to_integer(o) end)
+
       assert length(offsets) == 6
 
       offsets
@@ -95,7 +99,16 @@ defmodule Fresco.PdfExportTest do
 
   test "a host's high-resolution copy is what gets exported" do
     canvas = Fresco.Canvas.new(width: 100, height: 100)
-    canvas = Fresco.Canvas.add_image(canvas, %{src: "/medium.jpg", export_src: "/original.jpg", x: 0, y: 0, width: 100})
+
+    canvas =
+      Fresco.Canvas.add_image(canvas, %{
+        src: "/medium.jpg",
+        export_src: "/original.jpg",
+        x: 0,
+        y: 0,
+        width: 100
+      })
+
     assert [%{export_src: "/original.jpg"}] = canvas.images
     assigns = %{canvas: canvas}
     html = rendered_to_string(~H|<Fresco.canvas id="c" canvas={@canvas} pdf_export />|)
@@ -121,6 +134,7 @@ defmodule Fresco.PdfExportTest do
   describe "nav_style: :bar (one look with Etcher's tool bar)" do
     test "the attribute reaches the element, and only when asked for" do
       assigns = %{}
+
       assert rendered_to_string(~H|<Fresco.viewer id="v" src="/x.jpg" nav_style={:bar} />|) =~
                ~s(data-nav-style="bar")
 
@@ -131,8 +145,13 @@ defmodule Fresco.PdfExportTest do
       src = File.read!(@source)
       assert src =~ ~s|if (opts && opts.style === "bar") nav.setAttribute("data-style", "bar");|
       assert src =~ ~s|if (nav.getAttribute("data-style")) pop.setAttribute("data-style"|
-      assert src =~ ~s|background: rgba(0, 0, 0, 0.7); border-radius: 10px; padding: 6px; gap: 6px;|
-      assert src =~ ~s|.fresco-nav[data-style=\\"bar\\"] button:hover { background: rgba(255, 255, 255, 0.12); }|
+
+      assert src =~
+               ~s|background: rgba(0, 0, 0, 0.7); border-radius: 10px; padding: 6px; gap: 6px;|
+
+      assert src =~
+               ~s|.fresco-nav[data-style=\\"bar\\"] button:hover { background: rgba(255, 255, 255, 0.12); }|
+
       assert src =~ ~s|navStyle: attrOpts.navStyle,|
       assert src =~ ~s|navStyle: canvasAttrOpts.navStyle,|
     end
