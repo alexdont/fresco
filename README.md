@@ -22,7 +22,7 @@ Fresco is its own small pan/zoom engine — **no OpenSeadragon, no `<canvas>` el
 ```elixir
 def deps do
   [
-    {:fresco, "~> 0.15"}
+    {:fresco, "~> 0.16"}
   ]
 end
 ```
