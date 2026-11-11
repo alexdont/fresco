@@ -117,4 +117,24 @@ defmodule Fresco.PdfExportTest do
     off = rendered_to_string(~H|<Fresco.viewer id="v" src="/x.jpg" />|)
     refute off =~ "data-pdf-export"
   end
+
+  describe "nav_style: :bar (one look with Etcher's tool bar)" do
+    test "the attribute reaches the element, and only when asked for" do
+      assigns = %{}
+      assert rendered_to_string(~H|<Fresco.viewer id="v" src="/x.jpg" nav_style={:bar} />|) =~
+               ~s(data-nav-style="bar")
+
+      refute rendered_to_string(~H|<Fresco.viewer id="v" src="/x.jpg" />|) =~ "data-nav-style"
+    end
+
+    test "the nav and its overflow popover take the bar look; the buttons inside are Etcher's" do
+      src = File.read!(@source)
+      assert src =~ ~s|if (opts && opts.style === "bar") nav.setAttribute("data-style", "bar");|
+      assert src =~ ~s|if (nav.getAttribute("data-style")) pop.setAttribute("data-style"|
+      assert src =~ ~s|background: rgba(0, 0, 0, 0.7); border-radius: 10px; padding: 6px; gap: 6px;|
+      assert src =~ ~s|.fresco-nav[data-style=\\"bar\\"] button:hover { background: rgba(255, 255, 255, 0.12); }|
+      assert src =~ ~s|navStyle: attrOpts.navStyle,|
+      assert src =~ ~s|navStyle: canvasAttrOpts.navStyle,|
+    end
+  end
 end

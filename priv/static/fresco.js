@@ -903,6 +903,20 @@
       "  outline: 2px solid var(--fresco-nav-focus); outline-offset: 1px;",
       "}",
       ".fresco-nav svg { width: 18px; height: 18px; }",
+      // `nav_style: :bar` — one dark bar with the buttons inside it, the look
+      // Etcher's tool bar has, so the viewer's controls and the annotation
+      // tools read as one interface (2026-11-11, head dev). The overflow
+      // popover is a `.fresco-nav` too and takes the same look.
+      ".fresco-nav[data-style=\"bar\"] {",
+      "  background: rgba(0, 0, 0, 0.7); border-radius: 10px; padding: 6px; gap: 6px;",
+      "  max-height: calc(100% - 24px);",
+      "}",
+      ".fresco-nav[data-style=\"bar\"] button {",
+      "  background: transparent; color: #fff; border-radius: 6px;",
+      "}",
+      ".fresco-nav[data-style=\"bar\"] button:hover { background: rgba(255, 255, 255, 0.12); }",
+      ".fresco-nav[data-style=\"bar\"] button[aria-pressed=\"true\"] { background: rgba(255, 255, 255, 0.24); }",
+      ".fresco-nav[data-style=\"bar\"] button:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.7); outline-offset: 1px; }",
 
       // ── Zoom control (`actual_size`) ────────────────────────────────────
       // The percentage, always showing, in the bottom-right corner; hover
@@ -1559,6 +1573,7 @@
       add("export_pdf", ICONS.exportPdf, "Export as PDF", handlers.onExportPdf);
     }
     nav.setAttribute("data-layout", opts && opts.layout === "row" ? "row" : "column");
+    if (opts && opts.style === "bar") nav.setAttribute("data-style", "bar");
     if (opts && opts.reverse) nav.setAttribute("data-reverse", "");
     host.appendChild(nav);
     enhanceNav(nav, host, opts && Array.isArray(opts.overflow) ? opts.overflow : []);
@@ -1599,6 +1614,7 @@
 
     var pop = document.createElement("div");
     pop.className = "fresco-nav fresco-nav-overflow";
+    if (nav.getAttribute("data-style")) pop.setAttribute("data-style", nav.getAttribute("data-style"));
     pop.hidden = true;
     host.insertBefore(pop, nav.nextSibling);
 
@@ -1751,6 +1767,7 @@
     if (el.dataset.actualSize === "true") opts.actualSize = true;
     if (el.dataset.pdfExport === "true") opts.pdfExport = true;
     if (el.dataset.navLayout === "row") opts.navLayout = "row";
+    if (el.dataset.navStyle === "bar") opts.navStyle = "bar";
     if (el.dataset.navReverse === "true") opts.navReverse = true;
     if (el.dataset.navOverflow) {
       opts.navOverflow = el.dataset.navOverflow.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
@@ -3096,6 +3113,7 @@
     }, {
       navButtonEnabled: function(name) { return navButtonEnabled(name); },
       layout: opts.navLayout,
+      style: opts.navStyle,
       overflow: opts.navOverflow,
       reverse: opts.navReverse
     });
@@ -3594,6 +3612,7 @@
       actualSize: attrOpts.actualSize,
       onExportPdf: attrOpts.pdfExport ? function() { exportViewerPdf().catch(function() {}); } : null,
       navLayout: attrOpts.navLayout,
+      navStyle: attrOpts.navStyle,
       navOverflow: attrOpts.navOverflow,
       navReverse: attrOpts.navReverse,
       gestures: attrOpts.gestures,
@@ -4050,6 +4069,7 @@
       actualSize: canvasAttrOpts.actualSize,
       onExportPdf: canvasAttrOpts.pdfExport ? function() { exportCanvasPdf().catch(function() {}); } : null,
       navLayout: canvasAttrOpts.navLayout,
+      navStyle: canvasAttrOpts.navStyle,
       navOverflow: canvasAttrOpts.navOverflow,
       navReverse: canvasAttrOpts.navReverse,
       gestures: canvasAttrOpts.gestures,

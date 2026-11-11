@@ -169,6 +169,17 @@ defmodule Fresco.Viewer do
     """
   )
 
+  attr(:nav_style, :atom,
+    default: :buttons,
+    values: [:buttons, :bar],
+    doc: """
+    How the nav is drawn. `:buttons` (default): each button its own square.
+    `:bar`: one dark bar with the buttons inside it — the look of Etcher's
+    tool bar, so a viewer with annotation reads as one interface. Buttons an
+    extension adds (Etcher's View / Annotate switch) take the same look.
+    """
+  )
+
   attr(:pdf_export, :boolean,
     default: false,
     doc: """
@@ -343,6 +354,7 @@ defmodule Fresco.Viewer do
       data-pan-locked={@pan_locked && "true"}
       data-invert-two-finger-pan={@invert_two_finger_pan && "true"}
       data-actual-size={@actual_size && "true"}
+      data-nav-style={@nav_style == :bar && "bar"}
       data-pdf-export={@pdf_export && "true"}
       data-export-filename={@export_filename}
       data-export-src={@export_src}

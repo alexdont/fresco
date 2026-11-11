@@ -650,6 +650,17 @@ defmodule Fresco.Canvas do
     """
   )
 
+  attr(:nav_style, :atom,
+    default: :buttons,
+    values: [:buttons, :bar],
+    doc: """
+    How the nav is drawn. `:buttons` (default): each button its own square.
+    `:bar`: one dark bar with the buttons inside it — the look of Etcher's
+    tool bar, so a viewer with annotation reads as one interface. Buttons an
+    extension adds (Etcher's View / Annotate switch) take the same look.
+    """
+  )
+
   attr(:pdf_export, :boolean,
     default: false,
     doc: """
@@ -970,6 +981,7 @@ defmodule Fresco.Canvas do
       data-invert-two-finger-pan={@invert_two_finger_pan && "true"}
       data-pan-centre={@pan_centre == :bounds && "bounds"}
       data-actual-size={@actual_size && "true"}
+      data-nav-style={@nav_style == :bar && "bar"}
       data-pdf-export={@pdf_export && "true"}
       data-export-filename={@export_filename}
       data-nav-layout={@nav_layout == :row && "row"}

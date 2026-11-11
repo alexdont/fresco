@@ -8,6 +8,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`nav_style: :bar`.** The nav drawn as one dark bar with its buttons
+  inside — the look of Etcher's tool bar — instead of a square per button,
+  so a viewer with annotation reads as one interface. The overflow popover
+  takes the same look, and so do buttons an extension adds (Etcher's View /
+  Annotate switch). Default unchanged.
 - **Export as PDF.** `pdf_export={true}` on `<Fresco.viewer>` /
   `<Fresco.canvas>` adds an "Export as PDF" nav button (`:export_pdf`, first
   behind ⋯ when room runs out), and `handle.exportPdf(opts)` does the same
