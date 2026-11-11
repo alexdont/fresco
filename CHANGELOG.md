@@ -4,6 +4,22 @@ All notable changes to Fresco are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- **Export as PDF.** `pdf_export={true}` on `<Fresco.viewer>` /
+  `<Fresco.canvas>` adds an "Export as PDF" nav button (`:export_pdf`, first
+  behind ⋯ when room runs out), and `handle.exportPdf(opts)` does the same
+  from a host's own control. It saves what the viewer shows — every picture
+  on the stage, turned the way the view is turned, on white — as a one-page
+  A4 PDF (landscape for a wide picture), built in the browser with no
+  library and no server round trip. `export_filename` names the file;
+  `export_src` (an image key on the canvas, an attr on the viewer) gives a
+  higher-resolution copy to export when the stage shows a screen-sized
+  variant; the long side is capped at 4000 px. Emits `fresco:exported` /
+  `fresco:export-failed`. Off by default.
+
 ## 0.15.0 — 2026-10-22
 
 ### Added

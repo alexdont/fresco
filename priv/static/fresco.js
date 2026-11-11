@@ -790,6 +790,8 @@
   // ===========================================================================
 
   var ICONS = {
+    // A page with a down arrow: export as PDF.
+    exportPdf: '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m.75 12 3 3m0 0 3-3m-3 3v-6m-1.5-9H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z"/></svg>',
     zoomIn:  '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607ZM10.5 7.5v6m3-3h-6"/></svg>',
     zoomOut: '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607ZM13.5 10.5h-6"/></svg>',
     // House = "home view" (the OpenSeadragon convention). Deliberately NOT
@@ -1337,6 +1339,185 @@
   // `handle.appendNavButton(...)`.
   // ===========================================================================
 
+  // ===========================================================================
+  // PDF export (2026-11-11, head dev: "a pdf export function")
+  //
+  // What the viewer shows, as a one-page PDF: the pictures on the stage
+  // composed over their combined bounds at their own resolution (a long side
+  // of at most EXPORT_MAX_SIDE px), turned the way the view is turned, on
+  // white (a transparent PNG would otherwise print black), as a JPEG on an
+  // A4 page — landscape for a wide picture — fitted inside a margin.
+  //
+  // No library: a PDF holding one JPEG is a handful of objects, and the JPEG
+  // bytes go in as they are (`/DCTDecode`). Pictures from another origin
+  // without CORS cannot be read back from a canvas; then nothing is
+  // downloaded and `fresco:export-failed` says why.
+  // ===========================================================================
+
+  var EXPORT_MAX_SIDE = 4000;
+  var EXPORT_JPEG_QUALITY = 0.92;
+
+  // A PDF string literal for the title: UTF-16BE in hex, so any language
+  // survives and nothing needs escaping.
+  function pdfText(str) {
+    var hex = "FEFF";
+    for (var i = 0; i < str.length; i++) hex += ("000" + str.charCodeAt(i).toString(16)).slice(-4);
+    return "<" + hex.toUpperCase() + ">";
+  }
+
+  // One page, one JPEG fitted in it. Returns the file's bytes.
+  function pdfFromJpeg(jpeg, w, h, title) {
+    var landscape = w > h;
+    var pw = landscape ? 841.89 : 595.28;
+    var ph = landscape ? 595.28 : 841.89;
+    var margin = 24;
+    var sc = Math.min((pw - 2 * margin) / w, (ph - 2 * margin) / h);
+    var dw = w * sc, dh = h * sc;
+    var dx = (pw - dw) / 2, dy = (ph - dh) / 2;
+    var f = function(n) { return (Math.round(n * 100) / 100).toString(); };
+
+    var parts = [];
+    var size = 0;
+    var offsets = [];
+    function push(x) {
+      var b = typeof x === "string" ? new TextEncoder().encode(x) : x;
+      parts.push(b);
+      size += b.length;
+    }
+    function obj(n, body) {
+      offsets[n] = size;
+      push(n + " 0 obj\n" + body + "\nendobj\n");
+    }
+
+    push("%PDF-1.4\n%");
+    push(new Uint8Array([0xE2, 0xE3, 0xCF, 0xD3, 0x0A]));
+    obj(1, "<< /Type /Catalog /Pages 2 0 R >>");
+    obj(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    obj(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + f(pw) + " " + f(ph) + "]" +
+           " /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>");
+    var content = "q " + f(dw) + " 0 0 " + f(dh) + " " + f(dx) + " " + f(dy) + " cm /Im0 Do Q";
+    obj(4, "<< /Length " + content.length + " >>\nstream\n" + content + "\nendstream");
+    offsets[5] = size;
+    push("5 0 obj\n<< /Type /XObject /Subtype /Image /Width " + w + " /Height " + h +
+         " /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length " +
+         jpeg.length + " >>\nstream\n");
+    push(jpeg);
+    push("\nendstream\nendobj\n");
+    obj(6, "<< /Producer (Fresco) /Title " + pdfText(title || "") + " >>");
+
+    var xref = size;
+    var table = "xref\n0 7\n0000000000 65535 f \n";
+    for (var n = 1; n <= 6; n++) table += ("000000000" + offsets[n]).slice(-10) + " 00000 n \n";
+    push(table + "trailer\n<< /Size 7 /Root 1 0 R /Info 6 0 R >>\nstartxref\n" + xref + "\n%%EOF\n");
+
+    var out = new Uint8Array(size);
+    var at = 0;
+    parts.forEach(function(b) { out.set(b, at); at += b.length; });
+    return out;
+  }
+
+  // Load a picture fresh for the export: a stage image may have had its src
+  // dropped to save memory while far off screen.
+  function loadForExport(src) {
+    return new Promise(function(resolve, reject) {
+      var im = new Image();
+      im.decoding = "async";
+      if (/^https?:/i.test(src) && src.indexOf(location.origin) !== 0) im.crossOrigin = "anonymous";
+      im.onload = function() { resolve(im); };
+      im.onerror = function() { reject(new Error("could not load " + src)); };
+      im.src = src;
+    });
+  }
+
+  // `entries`: [{ src, x, y, width, height }] in one coordinate space (canvas
+  // px; a single picture is just one at 0,0). Resolves the JPEG and its size.
+  function composeForExport(entries, rotation) {
+    entries = entries.filter(function(e) { return e.src && e.width > 0 && e.height > 0; });
+    if (!entries.length) return Promise.reject(new Error("nothing to export"));
+    return Promise.all(entries.map(function(e) { return loadForExport(e.src); })).then(function(ims) {
+      var x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, density = 0;
+      entries.forEach(function(e, i) {
+        x0 = Math.min(x0, e.x); y0 = Math.min(y0, e.y);
+        x1 = Math.max(x1, e.x + e.width); y1 = Math.max(y1, e.y + e.height);
+        // Pixels per unit, so the export keeps the sharpest picture's detail.
+        density = Math.max(density, (ims[i].naturalWidth || e.width) / e.width);
+      });
+      var bw = x1 - x0, bh = y1 - y0;
+      var k = Math.min(density || 1, EXPORT_MAX_SIDE / Math.max(bw, bh));
+      var w = Math.max(1, Math.round(bw * k)), h = Math.max(1, Math.round(bh * k));
+      var rot = (((rotation || 0) % 360) + 360) % 360;
+      var quarter = rot === 90 || rot === 270;
+      var c = document.createElement("canvas");
+      c.width = quarter ? h : w;
+      c.height = quarter ? w : h;
+      var ctx = c.getContext("2d");
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, c.width, c.height);
+      ctx.translate(c.width / 2, c.height / 2);
+      ctx.rotate(rot * Math.PI / 180);
+      ctx.translate(-w / 2, -h / 2);
+      entries.forEach(function(e, i) {
+        ctx.drawImage(ims[i], (e.x - x0) * k, (e.y - y0) * k, e.width * k, e.height * k);
+      });
+      return new Promise(function(resolve, reject) {
+        try {
+          c.toBlob(function(blob) {
+            if (!blob) return reject(new Error("the picture could not be encoded"));
+            blob.arrayBuffer().then(function(buf) {
+              resolve({ jpeg: new Uint8Array(buf), width: c.width, height: c.height });
+            }, reject);
+          }, "image/jpeg", EXPORT_JPEG_QUALITY);
+        } catch (err) {
+          // A picture from another origin without CORS taints the canvas.
+          reject(err);
+        }
+      });
+    });
+  }
+
+  // The file name: the host's (`export_filename`), else the first picture's.
+  function exportName(el, entries) {
+    var named = el && el.dataset && el.dataset.exportFilename;
+    var base = named || "";
+    if (!base && entries[0] && entries[0].src) {
+      base = decodeURIComponent(entries[0].src.split(/[?#]/)[0].split("/").pop() || "");
+    }
+    base = base.replace(/\.[a-z0-9]{2,5}$/i, "").replace(/[\\/:*?"<>|]+/g, "_") || "picture";
+    return base + ".pdf";
+  }
+
+  // Compose, wrap, download. Resolves the PDF Blob (also handed back to a
+  // caller that wants it without the download: `opts.download === false`).
+  function exportPdf(el, entries, rotation, opts) {
+    opts = opts || {};
+    var name = opts.filename || exportName(el, entries);
+    return composeForExport(entries, rotation).then(function(r) {
+      var bytes = pdfFromJpeg(r.jpeg, r.width, r.height, name.replace(/\.pdf$/i, ""));
+      var blob = new Blob([bytes], { type: "application/pdf" });
+      if (opts.download !== false) {
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url;
+        a.download = name;
+        a.style.display = "none";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function() { URL.revokeObjectURL(url); }, 30000);
+      }
+      if (el) el.dispatchEvent(new CustomEvent("fresco:exported", { bubbles: true, detail: { filename: name, bytes: bytes.length } }));
+      return blob;
+    }, function(err) {
+      if (el) {
+        el.dispatchEvent(new CustomEvent("fresco:export-failed", {
+          bubbles: true, detail: { reason: String(err && err.message || err) }
+        }));
+      }
+      if (typeof console !== "undefined" && console.warn) console.warn("[Fresco] PDF export failed:", err);
+      throw err;
+    });
+  }
+
   function buildNav(host, handlers, opts) {
     injectStyles();
     var nav = document.createElement("div");
@@ -1373,6 +1554,10 @@
       add("rotate", ICONS.rotate, "Rotate right 90°", handlers.onRotate);
     }
     if (enabled("home"))       add("home", ICONS.reset, "Reset view", handlers.onFit);
+    // Only where the host turned it on (`pdf_export`) — see `exportPdf`.
+    if (enabled("export_pdf") && handlers.onExportPdf) {
+      add("export_pdf", ICONS.exportPdf, "Export as PDF", handlers.onExportPdf);
+    }
     nav.setAttribute("data-layout", opts && opts.layout === "row" ? "row" : "column");
     if (opts && opts.reverse) nav.setAttribute("data-reverse", "");
     host.appendChild(nav);
@@ -1385,7 +1570,7 @@
   // view" are what is left on the smallest screens, beside whatever an
   // extension added (Etcher's pencil and eye), which never move — a host
   // that put a button there wants it seen.
-  var NAV_COLLAPSE = ["fullscreen", "rotate_left", "rotate", "actual_size", "zoom_out", "zoom_in", "home"];
+  var NAV_COLLAPSE = ["export_pdf", "fullscreen", "rotate_left", "rotate", "actual_size", "zoom_out", "zoom_in", "home"];
 
   // Fits the nav to the room it has. Whatever does not fit moves into a
   // popover behind a "more" button at the end, and moves back as the room
@@ -1564,6 +1749,7 @@
     if (el.dataset.invertTwoFingerPan === "true") opts.invertTwoFingerPan = true;
     if (el.dataset.panCentre === "bounds") opts.panCentreBounds = true;
     if (el.dataset.actualSize === "true") opts.actualSize = true;
+    if (el.dataset.pdfExport === "true") opts.pdfExport = true;
     if (el.dataset.navLayout === "row") opts.navLayout = "row";
     if (el.dataset.navReverse === "true") opts.navReverse = true;
     if (el.dataset.navOverflow) {
@@ -2905,7 +3091,8 @@
       onActualSize: actualSize ? toggleActualSize : null,
       onRotate: function() { rotateBy(90); },
       onRotateLeft: function() { rotateBy(-90); },
-      onFullscreen: toggleFullscreen
+      onFullscreen: toggleFullscreen,
+      onExportPdf: opts.onExportPdf || null
     }, {
       navButtonEnabled: function(name) { return navButtonEnabled(name); },
       layout: opts.navLayout,
@@ -3387,6 +3574,14 @@
     var infiniteCanvas = el.dataset.infiniteCanvas === "true";
     var currentSrc = img.getAttribute("src") || el.dataset.src || "";
 
+    // The one picture, as the viewer shows it (see `exportPdf`).
+    function exportViewerPdf(o) {
+      return exportPdf(el, [{
+        src: el.dataset.exportSrc || img.currentSrc || img.getAttribute("src") || el.dataset.src || "",
+        x: 0, y: 0, width: img.naturalWidth || 0, height: img.naturalHeight || 0
+      }], engine.getRotation(), o);
+    }
+
     var attrOpts = readConstraintAttrs(el);
     var engine = createTransformEngine({
       el: el,
@@ -3397,6 +3592,7 @@
       panLocked: attrOpts.panLocked,
       invertTwoFingerPan: attrOpts.invertTwoFingerPan,
       actualSize: attrOpts.actualSize,
+      onExportPdf: attrOpts.pdfExport ? function() { exportViewerPdf().catch(function() {}); } : null,
       navLayout: attrOpts.navLayout,
       navOverflow: attrOpts.navOverflow,
       navReverse: attrOpts.navReverse,
@@ -3555,6 +3751,7 @@
       setRotation: engine.setRotation,
       getRotation: engine.getRotation,
       rotateBy: engine.rotateBy,
+      exportPdf: exportViewerPdf,
       getZoomPercent: engine.getZoomPercent,
       isAtHome: engine.isAtHome,
       zoomToActualSize: engine.zoomToActualSize,
@@ -3692,6 +3889,9 @@
       getGridVisible: function() { return controller.getGridVisible(); },
       setRotation:    function(deg) { controller.setRotation(deg); },
       getRotation:    function() { return controller.getRotation(); },
+      // One-page PDF of what the viewer shows; resolves the Blob. Pass
+      // `{download: false}` to keep it, `{filename}` to name it.
+      exportPdf:      function(o) { return controller.exportPdf(o); },
       rotateBy:       function(delta) { controller.rotateBy(delta); },
       // Named quarter-turn helpers (right = +90 CW, left = -90 CCW), the
       // twins of the two rotate nav buttons. Both persist like the buttons.
@@ -3820,6 +4020,23 @@
       return { x: x, y: y, width: w, height: h };
     }
 
+    // Every picture on the stage that is showing, lowest first, in canvas px
+    // (see `exportPdf`).
+    function exportCanvasPdf(o) {
+      var entries = imgs
+        .filter(function(im) { return !hiddenImageIds.has(im.dataset.imageId); })
+        .map(function(im) {
+          var r = imgRect(im);
+          // The host's high-resolution copy when it gave one (`export_src`):
+          // the stage often shows a screen-sized variant.
+          return { src: im.dataset.exportSrc || im.currentSrc || im.getAttribute("src") || im.dataset.src || "",
+                   x: r.x, y: r.y, width: r.width, height: r.height,
+                   z: parseInt(im.dataset.zIndex || im.style.zIndex || "0", 10) || 0 };
+        })
+        .sort(function(a, b) { return a.z - b.z; });
+      return exportPdf(el, entries, engine.getRotation(), o);
+    }
+
     var canvasAttrOpts = readConstraintAttrs(el);
     var engine = createTransformEngine({
       el: el,
@@ -3831,6 +4048,7 @@
       invertTwoFingerPan: canvasAttrOpts.invertTwoFingerPan,
       panCentreBounds: canvasAttrOpts.panCentreBounds,
       actualSize: canvasAttrOpts.actualSize,
+      onExportPdf: canvasAttrOpts.pdfExport ? function() { exportCanvasPdf().catch(function() {}); } : null,
       navLayout: canvasAttrOpts.navLayout,
       navOverflow: canvasAttrOpts.navOverflow,
       navReverse: canvasAttrOpts.navReverse,
@@ -4401,6 +4619,7 @@
       isInfiniteCanvas: engine.isInfiniteCanvas,
       getCanvasSize: function() { return { width: canvasW, height: canvasH }; },
       getImages: getImages,
+      exportPdf: exportCanvasPdf,
       imageBoundsFor: imageBoundsFor,
       getExtension: getExtension,
       fit: engine.fit,
@@ -4637,6 +4856,9 @@
       getGridVisible: function() { return controller.getGridVisible(); },
       setRotation:    function(deg) { controller.setRotation(deg); },
       getRotation:    function() { return controller.getRotation(); },
+      // One-page PDF of what the viewer shows; resolves the Blob. Pass
+      // `{download: false}` to keep it, `{filename}` to name it.
+      exportPdf:      function(o) { return controller.exportPdf(o); },
       rotateBy:       function(delta) { controller.rotateBy(delta); },
       // Named quarter-turn helpers (right = +90 CW, left = -90 CCW), the
       // twins of the two rotate nav buttons. Both fire the `rotate` event,

@@ -192,7 +192,10 @@ defmodule Fresco.Canvas do
 
   Required attrs: `:src` (string URL/path), `:x`, `:y`, `:width` (numbers,
   width > 0). Optional: `:id` (auto-assigned `img-N` when omitted),
-  `:z_index`, `:natural_width`, `:natural_height`.
+  `:z_index`, `:natural_width`, `:natural_height`, and `:export_src` — a
+  higher-resolution URL for "Export as PDF" (`pdf_export`) to use instead of
+  `:src`, when `:src` is a screen-sized variant. Runtime only: it is not part
+  of the `.fresco` format and is never written back.
 
   Raises `ArgumentError` on invalid attrs.
   """
@@ -240,7 +243,12 @@ defmodule Fresco.Canvas do
     base = %{id: id, src: src, x: x, y: y, width: width, __extra__: %{}}
     base = maybe_put_number(base, attrs, :z_index, "z_index")
     base = maybe_put_number(base, attrs, :natural_width, "natural_width")
-    maybe_put_number(base, attrs, :natural_height, "natural_height")
+    base = maybe_put_number(base, attrs, :natural_height, "natural_height")
+
+    case Map.get(attrs, :export_src) || Map.get(attrs, "export_src") do
+      s when is_binary(s) and s != "" -> Map.put(base, :export_src, s)
+      _ -> base
+    end
   end
 
   defp maybe_put_number(map, attrs, key, str_key) do
@@ -642,6 +650,26 @@ defmodule Fresco.Canvas do
     """
   )
 
+  attr(:pdf_export, :boolean,
+    default: false,
+    doc: """
+    Adds an "Export as PDF" button to the nav (`:export_pdf`; behind the
+    "more" button first when room runs out). It saves what the viewer shows —
+    every picture on the stage, turned the way the view is turned — as a
+    one-page A4 PDF, on white, in the browser: no server round trip and no
+    library. `handle.exportPdf(opts)` does the same from a host's own button
+    (`{filename: "…"}`, `{download: false}` to get the `Blob` back). The
+    element emits `fresco:exported` or `fresco:export-failed`. Pictures from
+    another origin need CORS, or the browser will not let them be read back.
+    Off by default.
+    """
+  )
+
+  attr(:export_filename, :string,
+    default: nil,
+    doc: "The PDF's file name (`.pdf` is added); defaults to the first picture's."
+  )
+
   attr(:actual_size, :boolean,
     default: false,
     doc: """
@@ -775,8 +803,9 @@ defmodule Fresco.Canvas do
     default: nil,
     doc: """
     Allowlist of enabled built-in nav buttons. Atom list:
-    `[:home, :zoom_in, :zoom_out, :actual_size, :rotate, :rotate_left, :fullscreen]`
-    (`:actual_size` only shows with `actual_size: true`).
+    `[:home, :zoom_in, :zoom_out, :actual_size, :rotate, :rotate_left, :fullscreen,
+    :export_pdf]` (`:actual_size` only shows with `actual_size: true`,
+    `:export_pdf` only with `pdf_export: true`).
 
     `:rotate` rotates clockwise (+90); `:rotate_left` is its
     counter-clockwise twin (-90), rendered just before it.
@@ -941,6 +970,8 @@ defmodule Fresco.Canvas do
       data-invert-two-finger-pan={@invert_two_finger_pan && "true"}
       data-pan-centre={@pan_centre == :bounds && "bounds"}
       data-actual-size={@actual_size && "true"}
+      data-pdf-export={@pdf_export && "true"}
+      data-export-filename={@export_filename}
       data-nav-layout={@nav_layout == :row && "row"}
       data-nav-reverse={@nav_reverse && "true"}
       data-nav-overflow={@nav_overflow != [] && Enum.map_join(@nav_overflow, ",", &to_string/1)}
@@ -974,6 +1005,7 @@ defmodule Fresco.Canvas do
             data-canvas-width={img.width}
             data-canvas-height={canvas_image_height(img)}
             data-z-index={Map.get(img, :z_index, 0)}
+            data-export-src={Map.get(img, :export_src)}
             data-fresco-prefit={@prefit? && "true"}
             style={image_style(img, @prefit? && if(@actual_size, do: :actual, else: true))}
             draggable="false"

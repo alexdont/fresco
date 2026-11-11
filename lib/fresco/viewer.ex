@@ -169,6 +169,31 @@ defmodule Fresco.Viewer do
     """
   )
 
+  attr(:pdf_export, :boolean,
+    default: false,
+    doc: """
+    Adds an "Export as PDF" button to the nav (`:export_pdf`; behind the
+    "more" button first when room runs out). It saves what the viewer shows —
+    every picture on the stage, turned the way the view is turned — as a
+    one-page A4 PDF, on white, in the browser: no server round trip and no
+    library. `handle.exportPdf(opts)` does the same from a host's own button
+    (`{filename: "…"}`, `{download: false}` to get the `Blob` back). The
+    element emits `fresco:exported` or `fresco:export-failed`. Pictures from
+    another origin need CORS, or the browser will not let them be read back.
+    Off by default.
+    """
+  )
+
+  attr(:export_src, :string,
+    default: nil,
+    doc: "A higher-resolution URL for \"Export as PDF\" to use instead of `src`."
+  )
+
+  attr(:export_filename, :string,
+    default: nil,
+    doc: "The PDF's file name (`.pdf` is added); defaults to the first picture's."
+  )
+
   attr(:actual_size, :boolean,
     default: false,
     doc: """
@@ -232,8 +257,9 @@ defmodule Fresco.Viewer do
     default: nil,
     doc: """
     Allowlist of enabled built-in nav buttons. Atom list:
-    `[:home, :zoom_in, :zoom_out, :actual_size, :rotate, :rotate_left, :fullscreen]`
-    (`:actual_size` only shows with `actual_size: true`).
+    `[:home, :zoom_in, :zoom_out, :actual_size, :rotate, :rotate_left, :fullscreen,
+    :export_pdf]` (`:actual_size` only shows with `actual_size: true`,
+    `:export_pdf` only with `pdf_export: true`).
 
     `:rotate` rotates clockwise (+90); `:rotate_left` is its
     counter-clockwise twin (-90), rendered just before it.
@@ -317,6 +343,9 @@ defmodule Fresco.Viewer do
       data-pan-locked={@pan_locked && "true"}
       data-invert-two-finger-pan={@invert_two_finger_pan && "true"}
       data-actual-size={@actual_size && "true"}
+      data-pdf-export={@pdf_export && "true"}
+      data-export-filename={@export_filename}
+      data-export-src={@export_src}
       data-nav-layout={@nav_layout == :row && "row"}
       data-nav-reverse={@nav_reverse && "true"}
       data-nav-overflow={@nav_overflow != [] && Enum.map_join(@nav_overflow, ",", &to_string/1)}
